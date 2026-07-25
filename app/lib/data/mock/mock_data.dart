@@ -1,0 +1,577 @@
+import 'package:flutter/material.dart';
+import '../models/models.dart';
+
+/// Mock data for UI development. Replace with API repository calls.
+abstract final class MockData {
+  static const user = UserModel(
+    id: 'exec-001',
+    name: 'Rajesh Kumar',
+    employeeCode: 'SE-2045',
+    email: 'rajesh.kumar@crgs.com',
+    assignedRoute: 'North Zone - Route A12',
+    assignedRouteId: 'route-a12',
+    monthlyTarget: 2500000,
+    monthlyAchieved: 1875000,
+  );
+
+  static final dashboardSummary = DashboardSummary(
+    todaysVisits: 12,
+    missingCustomers: 3,
+    followUpCustomers: 5,
+    newLeads: 2,
+    outstandingCustomers: 7,
+    todaysTasks: 6,
+    dailySalesTargetPercent: 65,
+    monthlyTargetPercent: 42,
+    routePerformance: 88,
+    dailyTargetAmount: 85000,
+    dailyAchievedAmount: 61200,
+    monthlyTargetAmount: 2500000,
+    monthlyAchievedAmount: 1875000,
+  );
+
+  static const routes = [
+    RouteModel(
+      id: 'route-abu-hamur',
+      name: 'Abu Hamur',
+      routeNumber: 'R-101',
+      imageAsset: 'assets/images/routes/route_abu_hamur.jpg',
+      zone: 'South Zone',
+    ),
+    RouteModel(
+      id: 'route-burgan',
+      name: 'Burgan',
+      routeNumber: 'R-102',
+      imageAsset: 'assets/images/routes/route_burgan.jpg',
+      zone: 'East Zone',
+    ),
+    RouteModel(
+      id: 'route-al-sadd',
+      name: 'Al Sadd',
+      routeNumber: 'R-103',
+      imageAsset: 'assets/images/routes/route_al_sadd.jpg',
+      zone: 'Central Zone',
+    ),
+    RouteModel(
+      id: 'route-doha-hilal',
+      name: 'Doha 4 (HILAL)',
+      routeNumber: 'R-104',
+      imageAsset: 'assets/images/routes/route_doha_hilal.jpg',
+      zone: 'West Zone',
+    ),
+  ];
+
+  static final customers = [
+    CustomerModel(
+      id: 'c1',
+      name: 'Sharma General Store',
+      contactPerson: 'Amit Sharma',
+      mobile: '+974 4412 3301',
+      location: 'Abu Hamur, Doha',
+      routeName: 'Abu Hamur',
+      routeId: 'route-abu-hamur',
+      priority: CustomerPriority.missing,
+      lastPurchaseDate: DateTime(2026, 3, 15),
+      lastPurchaseAmount: 45000,
+      outstandingAmount: 12500,
+      riskScore: 85,
+      gpsDistanceKm: 1.2,
+      latitude: 25.3234,
+      longitude: 51.5300,
+      category: 'General Trade',
+      averageMonthlyPurchase: 52000,
+      purchaseFrequency: 'Bi-weekly',
+      creditLimit: 100000,
+    ),
+    CustomerModel(
+      id: 'c2',
+      name: 'Patel Electronics',
+      contactPerson: 'Vikram Patel',
+      mobile: '+974 4412 3302',
+      location: 'Burgan, Doha',
+      routeName: 'Burgan',
+      routeId: 'route-burgan',
+      priority: CustomerPriority.outstanding,
+      lastPurchaseDate: DateTime(2026, 5, 20),
+      lastPurchaseAmount: 78000,
+      outstandingAmount: 45000,
+      riskScore: 72,
+      gpsDistanceKm: 2.8,
+      latitude: 25.2867,
+      longitude: 51.5333,
+      category: 'Electronics',
+      averageMonthlyPurchase: 95000,
+      purchaseFrequency: 'Monthly',
+      creditLimit: 200000,
+    ),
+    CustomerModel(
+      id: 'c3',
+      name: 'Green Valley Mart',
+      contactPerson: 'Priya Nair',
+      mobile: '+974 4412 3303',
+      location: 'Al Sadd, Doha',
+      routeName: 'Al Sadd',
+      routeId: 'route-al-sadd',
+      priority: CustomerPriority.followUp,
+      lastPurchaseDate: DateTime(2026, 5, 28),
+      lastPurchaseAmount: 32000,
+      outstandingAmount: 0,
+      riskScore: 35,
+      gpsDistanceKm: 0.8,
+      latitude: 25.2721,
+      longitude: 51.5103,
+      category: 'Modern Trade',
+      averageMonthlyPurchase: 48000,
+      purchaseFrequency: 'Weekly',
+      creditLimit: 75000,
+    ),
+    CustomerModel(
+      id: 'c4',
+      name: 'City Fresh Mart',
+      contactPerson: 'Suresh Reddy',
+      mobile: '+974 4412 3304',
+      location: 'HILAL, Doha',
+      routeName: 'Doha 4 (HILAL)',
+      routeId: 'route-doha-hilal',
+      priority: CustomerPriority.regular,
+      lastPurchaseDate: DateTime(2026, 6, 10),
+      lastPurchaseAmount: 56000,
+      outstandingAmount: 0,
+      riskScore: 15,
+      gpsDistanceKm: 3.5,
+      latitude: 25.3714,
+      longitude: 51.5406,
+      category: 'General Trade',
+      averageMonthlyPurchase: 62000,
+      purchaseFrequency: 'Weekly',
+      creditLimit: 120000,
+    ),
+    CustomerModel(
+      id: 'c5',
+      name: 'Metro Wholesale',
+      contactPerson: 'Anil Gupta',
+      mobile: '+974 4412 3305',
+      location: 'Abu Hamur Industrial',
+      routeName: 'Abu Hamur',
+      routeId: 'route-abu-hamur',
+      priority: CustomerPriority.missing,
+      lastPurchaseDate: DateTime(2026, 2, 10),
+      lastPurchaseAmount: 92000,
+      outstandingAmount: 28000,
+      riskScore: 90,
+      gpsDistanceKm: 5.2,
+      latitude: 25.4167,
+      longitude: 51.5000,
+      category: 'Wholesale',
+      averageMonthlyPurchase: 110000,
+      purchaseFrequency: 'Monthly',
+      creditLimit: 300000,
+    ),
+    CustomerModel(
+      id: 'c6',
+      name: 'Gulf Trading Co.',
+      contactPerson: 'Khalid Al Mansouri',
+      mobile: '+974 4412 3306',
+      location: 'Burgan Market, Doha',
+      routeName: 'Burgan',
+      routeId: 'route-burgan',
+      priority: CustomerPriority.regular,
+      lastPurchaseDate: DateTime(2026, 6, 8),
+      lastPurchaseAmount: 41000,
+      outstandingAmount: 0,
+      riskScore: 20,
+      gpsDistanceKm: 1.5,
+      latitude: 25.2950,
+      longitude: 51.5200,
+      category: 'Wholesale',
+      averageMonthlyPurchase: 55000,
+      purchaseFrequency: 'Weekly',
+      creditLimit: 150000,
+    ),
+    CustomerModel(
+      id: 'c7',
+      name: 'Al Sadd Mini Mart',
+      contactPerson: 'Fatima Hassan',
+      mobile: '+974 4412 3307',
+      location: 'Al Sadd Street, Doha',
+      routeName: 'Al Sadd',
+      routeId: 'route-al-sadd',
+      priority: CustomerPriority.outstanding,
+      lastPurchaseDate: DateTime(2026, 5, 5),
+      lastPurchaseAmount: 28000,
+      outstandingAmount: 8500,
+      riskScore: 55,
+      gpsDistanceKm: 0.6,
+      latitude: 25.2750,
+      longitude: 51.5120,
+      category: 'General Trade',
+      averageMonthlyPurchase: 35000,
+      purchaseFrequency: 'Bi-weekly',
+      creditLimit: 80000,
+    ),
+    CustomerModel(
+      id: 'c8',
+      name: 'HILAL Supermarket',
+      contactPerson: 'Mohammed Ali',
+      mobile: '+974 4412 3308',
+      location: 'HILAL Area, Doha',
+      routeName: 'Doha 4 (HILAL)',
+      routeId: 'route-doha-hilal',
+      priority: CustomerPriority.followUp,
+      lastPurchaseDate: DateTime(2026, 5, 22),
+      lastPurchaseAmount: 67000,
+      outstandingAmount: 0,
+      riskScore: 30,
+      gpsDistanceKm: 2.1,
+      latitude: 25.3100,
+      longitude: 51.4800,
+      category: 'Modern Trade',
+      averageMonthlyPurchase: 72000,
+      purchaseFrequency: 'Weekly',
+      creditLimit: 180000,
+    ),
+  ];
+
+  static final tasks = [
+    TaskModel(
+      id: 't1',
+      title: 'Collect outstanding from Patel Electronics',
+      description: 'Follow up on overdue invoice and confirm payment plan',
+      priority: TaskPriority.high,
+      dueDate: DateTime(2026, 6, 13),
+      status: TaskStatus.pending,
+      type: TaskType.routeTask,
+      customerId: 'c2',
+      customerName: 'Patel Electronics',
+      routeId: 'route-burgan',
+      routeName: 'Burgan',
+    ),
+    TaskModel(
+      id: 't2',
+      title: 'Recovery visit - Sharma General Store',
+      description: 'Investigate missing customer reason and restock discussion',
+      priority: TaskPriority.urgent,
+      dueDate: DateTime(2026, 6, 13),
+      status: TaskStatus.inProgress,
+      type: TaskType.routeTask,
+      customerId: 'c1',
+      customerName: 'Sharma General Store',
+      routeId: 'route-abu-hamur',
+      routeName: 'Abu Hamur',
+    ),
+    TaskModel(
+      id: 't3',
+      title: 'Supplier meeting - North Zone pricing',
+      description: 'Quarterly review with distributor on new SKU margins',
+      priority: TaskPriority.medium,
+      dueDate: DateTime(2026, 6, 14),
+      status: TaskStatus.pending,
+      type: TaskType.additionalTask,
+    ),
+    TaskModel(
+      id: 't4',
+      title: 'Team briefing - recovery targets',
+      description: 'Weekly meeting with area manager on route KPIs',
+      priority: TaskPriority.low,
+      dueDate: DateTime(2026, 6, 15),
+      status: TaskStatus.pending,
+      type: TaskType.additionalTask,
+    ),
+  ];
+
+  static const customerFollowUpProgress = [
+    CustomerFollowUpProgress(
+      customerId: 'c2',
+      customerName: 'Patel Electronics',
+      routeName: 'Burgan',
+      completedFollowUps: 3,
+      totalFollowUps: 5,
+    ),
+    CustomerFollowUpProgress(
+      customerId: 'c3',
+      customerName: 'Green Valley Mart',
+      routeName: 'Al Sadd',
+      completedFollowUps: 1,
+      totalFollowUps: 4,
+    ),
+    CustomerFollowUpProgress(
+      customerId: 'c1',
+      customerName: 'Sharma General Store',
+      routeName: 'Abu Hamur',
+      completedFollowUps: 2,
+      totalFollowUps: 6,
+    ),
+  ];
+
+  static final followUps = [
+    FollowUpModel(
+      id: 'f1',
+      customerId: 'c3',
+      customerName: 'Green Valley Mart',
+      date: DateTime(2026, 6, 13),
+      time: const TimeOfDay(hour: 10, minute: 30),
+      priority: TaskPriority.medium,
+      notes: 'Discuss new product line',
+      status: FollowUpStatus.pending,
+    ),
+    FollowUpModel(
+      id: 'f2',
+      customerId: 'c2',
+      customerName: 'Patel Electronics',
+      date: DateTime(2026, 6, 12),
+      time: const TimeOfDay(hour: 14, minute: 0),
+      priority: TaskPriority.high,
+      notes: 'Payment collection follow-up',
+      status: FollowUpStatus.completed,
+    ),
+  ];
+
+  static final outstandingInvoices = [
+    OutstandingInvoice(
+      id: 'inv1',
+      invoiceNumber: 'INV-2026-04521',
+      invoiceDate: DateTime(2026, 4, 15),
+      dueDate: DateTime(2026, 5, 15),
+      outstandingAmount: 45000,
+      customerId: 'c2',
+      customerName: 'Patel Electronics',
+    ),
+    OutstandingInvoice(
+      id: 'inv2',
+      invoiceNumber: 'INV-2026-03892',
+      invoiceDate: DateTime(2026, 3, 20),
+      dueDate: DateTime(2026, 4, 20),
+      outstandingAmount: 12500,
+      customerId: 'c1',
+      customerName: 'Sharma General Store',
+    ),
+  ];
+
+  static final recommendedProducts = [
+    RecommendedProduct(
+      id: 'p1',
+      name: 'Premium Rice 25kg',
+      lastPurchasedQty: 100,
+      suggestedQty: 120,
+      category: 'Staples',
+      imageUrl:
+          'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=400',
+    ),
+    RecommendedProduct(
+      id: 'p2',
+      name: 'Cooking Oil 5L',
+      lastPurchasedQty: 60,
+      suggestedQty: 80,
+      category: 'Edibles',
+      imageUrl:
+          'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=400',
+    ),
+    RecommendedProduct(
+      id: 'p3',
+      name: 'Detergent Powder 1kg',
+      lastPurchasedQty: 150,
+      suggestedQty: 200,
+      category: 'FMCG',
+      imageUrl:
+          'https://images.unsplash.com/photo-1583947215259-38e31be8751f?w=400',
+    ),
+  ];
+
+  static final orderedProducts = [
+    OrderedProductModel(
+      id: 'op1',
+      name: 'Premium Rice 25kg',
+      quantity: 120,
+      category: 'Staples',
+      unitPrice: 1850,
+      imageUrl:
+          'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=400',
+      details:
+          'Long-grain basmati rice, 25 kg sack. Customer usually orders 100–120 units monthly for retail shelf stock.',
+      alternatives: [
+        AlternativeProductModel(
+          id: 'alt1',
+          name: 'Economy Rice 25kg',
+          category: 'Staples',
+          unitPrice: 1420,
+          imageUrl:
+              'https://images.unsplash.com/photo-1536304993881-ff6e9e6812a6?w=400',
+          details: 'Budget long-grain rice for price-sensitive buyers.',
+        ),
+        AlternativeProductModel(
+          id: 'alt2',
+          name: 'Organic Brown Rice 10kg',
+          category: 'Staples',
+          unitPrice: 980,
+          imageUrl:
+              'https://images.unsplash.com/photo-1516684669130-2191779c2479?w=400',
+          details: 'Premium organic brown rice — upsell for health-conscious shoppers.',
+        ),
+        AlternativeProductModel(
+          id: 'alt3',
+          name: 'Parboiled Rice 25kg',
+          category: 'Staples',
+          unitPrice: 1650,
+          imageUrl:
+              'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=400',
+          details: 'Parboiled variant with longer shelf life and firm texture.',
+        ),
+      ],
+    ),
+    OrderedProductModel(
+      id: 'op2',
+      name: 'Cooking Oil 5L',
+      quantity: 80,
+      category: 'Edibles',
+      unitPrice: 720,
+      imageUrl:
+          'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=400',
+      details:
+          'Refined sunflower oil, 5 L tin. High turnover item — last order was 60 units, suggested reorder 80.',
+      alternatives: [
+        AlternativeProductModel(
+          id: 'alt4',
+          name: 'Mustard Oil 5L',
+          category: 'Edibles',
+          unitPrice: 890,
+          imageUrl:
+              'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=400',
+          details: 'Traditional mustard oil popular in regional cooking.',
+        ),
+        AlternativeProductModel(
+          id: 'alt5',
+          name: 'Blended Oil 5L',
+          category: 'Edibles',
+          unitPrice: 650,
+          imageUrl:
+              'https://images.unsplash.com/photo-1620706857370-e1b9770a8c07?w=400',
+          details: 'Sunflower + soybean blend at a lower price point.',
+        ),
+      ],
+    ),
+    OrderedProductModel(
+      id: 'op3',
+      name: 'Detergent Powder 1kg',
+      quantity: 200,
+      category: 'FMCG',
+      unitPrice: 145,
+      imageUrl:
+          'https://images.unsplash.com/photo-1583947215259-38e31be8751f?w=400',
+      details:
+          'Multi-purpose laundry detergent, 1 kg pack. Bulk SKU — customer restocks every 2 weeks.',
+      alternatives: [
+        AlternativeProductModel(
+          id: 'alt6',
+          name: 'Liquid Detergent 2L',
+          category: 'FMCG',
+          unitPrice: 320,
+          imageUrl:
+              'https://images.unsplash.com/photo-1610557892470-55d9a57c5660?w=400',
+          details: 'Concentrated liquid formula — higher margin alternative.',
+        ),
+        AlternativeProductModel(
+          id: 'alt7',
+          name: 'Economy Detergent 500g',
+          category: 'FMCG',
+          unitPrice: 65,
+          imageUrl:
+              'https://images.unsplash.com/photo-1563453392217-3261992e2dac?w=400',
+          details: 'Small pack for trial and budget segment customers.',
+        ),
+        AlternativeProductModel(
+          id: 'alt8',
+          name: 'Fabric Softener 1L',
+          category: 'FMCG',
+          unitPrice: 210,
+          imageUrl:
+              'https://images.unsplash.com/photo-1585421514284-efb74c2b69c1?w=400',
+          details: 'Cross-sell companion product for the same aisle.',
+        ),
+      ],
+    ),
+    OrderedProductModel(
+      id: 'op4',
+      name: 'Instant Noodles Pack',
+      quantity: 48,
+      category: 'Snacks',
+      unitPrice: 55,
+      imageUrl:
+          'https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=400',
+      details:
+          '12-pack instant noodles carton. Impulse purchase item often bundled with cooking oil promotions.',
+      alternatives: [
+        AlternativeProductModel(
+          id: 'alt9',
+          name: 'Cup Noodles 6-pack',
+          category: 'Snacks',
+          unitPrice: 180,
+          imageUrl:
+              'https://images.unsplash.com/photo-1617093727343-374698b1d08c?w=400',
+          details: 'Premium cup format for on-the-go consumers.',
+        ),
+        AlternativeProductModel(
+          id: 'alt10',
+          name: 'Vermicelli 400g',
+          category: 'Staples',
+          unitPrice: 42,
+          imageUrl:
+              'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=400',
+          details: 'Quick-cook vermicelli as a healthier swap.',
+        ),
+      ],
+    ),
+  ];
+
+  static final activities = [
+    ActivityModel(
+      id: 'a1',
+      title: 'Visit completed',
+      subtitle: 'City Fresh Mart - Order QAR 56,000',
+      timestamp: DateTime(2026, 6, 13, 9, 30),
+      icon: 'check',
+    ),
+    ActivityModel(
+      id: 'a2',
+      title: 'Follow-up scheduled',
+      subtitle: 'Green Valley Mart - Tomorrow 10:30 AM',
+      timestamp: DateTime(2026, 6, 13, 8, 15),
+      icon: 'calendar',
+    ),
+    ActivityModel(
+      id: 'a3',
+      title: 'Recovery report submitted',
+      subtitle: 'Metro Wholesale - Competitor product',
+      timestamp: DateTime(2026, 6, 12, 16, 45),
+      icon: 'report',
+    ),
+  ];
+
+  static final notifications = [
+    NotificationModel(
+      id: 'n1',
+      title: 'Target Alert',
+      body: 'You are at 72% of daily sales target',
+      timestamp: DateTime(2026, 6, 13, 11, 0),
+    ),
+    NotificationModel(
+      id: 'n2',
+      title: 'New Task Assigned',
+      body: 'Recovery visit - Sharma General Store',
+      timestamp: DateTime(2026, 6, 13, 8, 30),
+      isRead: true,
+    ),
+  ];
+
+  static const recoveryReasons = [
+    'Product Quality Issue',
+    'High Price',
+    'Competitor Product',
+    'Out of Stock',
+    'Business Slow',
+    'Credit Limit Issue',
+    'Outstanding Balance',
+    'Delivery Issue',
+    'No Demand',
+    'Other',
+  ];
+}

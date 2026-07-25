@@ -1,0 +1,11 @@
+slide_number,title,subtitle,body,image_file,notes
+1,CRGS — Customer Recovery & Growth System,Web Admin + REX Mobile · Stakeholder Presentation · July 2026,"Plan → Assign → Execute → Measure",crgs-admin-users.png,Title slide — replace side image with Users UI
+2,Closing the Field-Force Gap,Operational gaps in route sales,"Missing customers without recovery playbooks; weak manager visibility; paper/chat visit capture; untracked campaigns",,Problem slide
+3,Business Objectives of CRGS,Outcomes mapped to product levers,"Recover missing customers; Grow revenue via targets; Improve route discipline with GPS visits; Manager visibility; Unify office & field on one API",,Objectives
+4,One Platform Two Experiences,CRGS Admin + REX APP,"Managers: users routes targets tasks reports · Executives: triage visits orders tasks · Shared Flask API on Oracle",crgs-admin-routes.png,Split product slide — use Routes screenshot
+5,Architecture: clients → API → Oracle,Three-tier design,"React Admin :5173 · Flutter REX · Flask :5000 /api · Oracle RFSS/rgc + CRGS_* tables",,Architecture
+6,Web Admin: Dashboard & Users,KPIs and team oversight,"Employee Code auth; dashboard KPIs; ROLECODE=3 executives; create / activate / assign routes",crgs-admin-users.png,Replace editable images with real screenshots
+7,Web Admin: Routes Targets & Tasks,Planning modules,"TBLROUTES assignment; Sales/Product/Customer targets; campaign task types; multi-tab reports",crgs-admin-targets.png,Use Targets + Tasks screenshots
+8,REX APP: Field execution,Sales executive day tool,"All/Missing/Outstanding triage; GPS visit start/end; product intro; expected orders; teal + orange CTAs",rex-app-orders.png,Phone / field UI screenshot
+9,Data map & operational loop,ERP-connected closed loop,"CRGS_USER TASK VISIT ORDER + SALETARGET PRODUCTTARGET CUSTOMERTARGET; plan→assign→execute→measure",,Data integration
+10,Ready for stakeholder walkthrough,Demo and next steps,"Demo: Admin → routes/targets/tasks → REX visit → orders → dashboard · Ask: rollout routes + field feedback",,Closing
