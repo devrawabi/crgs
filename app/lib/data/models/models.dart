@@ -32,6 +32,8 @@ class UserModel {
     this.avatarUrl,
     this.monthlyTarget = 0,
     this.monthlyAchieved = 0,
+    this.accessToken,
+    this.roleCode,
   });
 
   final String id;
@@ -45,6 +47,8 @@ class UserModel {
   final String? avatarUrl;
   final double monthlyTarget;
   final double monthlyAchieved;
+  final String? accessToken;
+  final String? roleCode;
 
   double get targetPercentage =>
       monthlyTarget > 0 ? (monthlyAchieved / monthlyTarget) * 100 : 0;
@@ -61,6 +65,8 @@ class UserModel {
         avatarUrl: json['avatar_url'] as String?,
         monthlyTarget: (json['monthly_target'] as num?)?.toDouble() ?? 0,
         monthlyAchieved: (json['monthly_achieved'] as num?)?.toDouble() ?? 0,
+        accessToken: json['access_token'] as String?,
+        roleCode: json['role_code']?.toString(),
       );
 
   factory UserModel.fromLoginResponse(Map<String, dynamic> json) {
@@ -84,6 +90,8 @@ class UserModel {
       assignedRouteId: routeNos.isNotEmpty ? routeNos.first : '',
       assignedRouteNos: routeNos,
       onboardingCompleted: _isOnboardingComplete(json['onboardFlag']),
+      accessToken: json['token']?.toString(),
+      roleCode: json['roleCode']?.toString(),
     );
   }
 
@@ -128,6 +136,8 @@ class UserModel {
     String? avatarUrl,
     double? monthlyTarget,
     double? monthlyAchieved,
+    String? accessToken,
+    String? roleCode,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -141,6 +151,8 @@ class UserModel {
       avatarUrl: avatarUrl ?? this.avatarUrl,
       monthlyTarget: monthlyTarget ?? this.monthlyTarget,
       monthlyAchieved: monthlyAchieved ?? this.monthlyAchieved,
+      accessToken: accessToken ?? this.accessToken,
+      roleCode: roleCode ?? this.roleCode,
     );
   }
 
@@ -156,6 +168,8 @@ class UserModel {
         'avatar_url': avatarUrl,
         'monthly_target': monthlyTarget,
         'monthly_achieved': monthlyAchieved,
+        'access_token': accessToken,
+        'role_code': roleCode,
       };
 }
 
@@ -525,6 +539,8 @@ class ProductTargetModel {
     required this.routeNo,
     this.baseUoms = const [],
     this.retailPrices = const [],
+    this.currentStocks = const [],
+    this.quantityLimits = const [],
   });
 
   final String employeeCode;
@@ -532,6 +548,8 @@ class ProductTargetModel {
   final List<String> productNames;
   final List<String> baseUoms;
   final List<double> retailPrices;
+  final List<double> currentStocks;
+  final List<double> quantityLimits;
   final String type;
   final double targetValue;
   final double achievedValue;
@@ -555,6 +573,12 @@ class ProductTargetModel {
   double retailPriceAt(int index) =>
       index >= 0 && index < retailPrices.length ? retailPrices[index] : 0;
 
+  double currentStockAt(int index) =>
+      index >= 0 && index < currentStocks.length ? currentStocks[index] : 0;
+
+  double quantityLimitAt(int index) =>
+      index >= 0 && index < quantityLimits.length ? quantityLimits[index] : 0;
+
   factory ProductTargetModel.fromJson(Map<String, dynamic> json) {
     final productsRaw = json['products'];
     final products = productsRaw is List
@@ -572,6 +596,14 @@ class ProductTargetModel {
     final retailPrices = retailPricesRaw is List
         ? retailPricesRaw.map(SalesTargetModel._toDouble).toList()
         : <double>[];
+    final currentStocksRaw = json['currentStocks'];
+    final currentStocks = currentStocksRaw is List
+        ? currentStocksRaw.map(SalesTargetModel._toDouble).toList()
+        : <double>[];
+    final quantityLimitsRaw = json['quantityLimits'];
+    final quantityLimits = quantityLimitsRaw is List
+        ? quantityLimitsRaw.map(SalesTargetModel._toDouble).toList()
+        : <double>[];
 
     return ProductTargetModel(
       employeeCode: json['employeeCode']?.toString() ?? '',
@@ -579,6 +611,8 @@ class ProductTargetModel {
       productNames: productNames,
       baseUoms: baseUoms,
       retailPrices: retailPrices,
+      currentStocks: currentStocks,
+      quantityLimits: quantityLimits,
       type: json['type']?.toString() ?? '',
       targetValue: SalesTargetModel._toDouble(json['targetValue']),
       achievedValue: SalesTargetModel._toDouble(json['achievedValue']),
@@ -1199,6 +1233,8 @@ class AlternativeProductModel {
     this.category = '',
     this.unitPrice = 0,
     this.baseUom = '',
+    this.stock = 0,
+    this.qtyLimit = 0,
   });
 
   final String id;
@@ -1208,6 +1244,12 @@ class AlternativeProductModel {
   final String category;
   final double unitPrice;
   final String baseUom;
+  /// CURRENTSTOCK from ITEMMASTER.
+  final double stock;
+  /// QUANTITYLIMIT from ITEMMASTER. When > 0, max order qty is this value.
+  final double qtyLimit;
+
+  bool get hasQtyLimit => qtyLimit > 0;
 
   String get priceLabel {
     if (unitPrice <= 0) return '';
@@ -1223,6 +1265,27 @@ class AlternativeProductModel {
     if (uom.isNotEmpty) return uom;
     if (price.isNotEmpty) return price;
     return '';
+  }
+
+  String get _stockLabel {
+    final value = stock % 1 == 0
+        ? stock.toStringAsFixed(0)
+        : stock.toStringAsFixed(2);
+    return 'Stock $value';
+  }
+
+  String get _qtyLimitLabel {
+    if (!hasQtyLimit) return '';
+    final value = qtyLimit % 1 == 0
+        ? qtyLimit.toStringAsFixed(0)
+        : qtyLimit.toStringAsFixed(2);
+    return 'Max $value';
+  }
+
+  String get stockLimitLabel {
+    final limit = _qtyLimitLabel;
+    if (limit.isEmpty) return _stockLabel;
+    return '$_stockLabel · $limit';
   }
 }
 

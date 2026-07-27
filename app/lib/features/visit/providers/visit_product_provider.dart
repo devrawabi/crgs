@@ -12,6 +12,8 @@ AlternativeProductModel _targetProductToAlternative({
   required String idPrefix,
   String baseUom = '',
   double unitPrice = 0,
+  double stock = 0,
+  double qtyLimit = 0,
 }) {
   return AlternativeProductModel(
     id: code.isNotEmpty ? code : '$idPrefix-$index-${name.hashCode}',
@@ -21,6 +23,8 @@ AlternativeProductModel _targetProductToAlternative({
     category: category,
     baseUom: baseUom,
     unitPrice: unitPrice,
+    stock: stock,
+    qtyLimit: qtyLimit,
   );
 }
 
@@ -33,7 +37,14 @@ List<AlternativeProductModel> _productsForTargetType(
 }) {
   if (targets == null) return const [];
 
-  final entries = <String, ({String code, String name, String baseUom, double unitPrice})>{};
+  final entries = <String, ({
+    String code,
+    String name,
+    String baseUom,
+    double unitPrice,
+    double stock,
+    double qtyLimit,
+  })>{};
   for (final target in targets.productTargets.where((target) => target.type == type)) {
     final codes = target.products;
     final names = target.displayProductNames;
@@ -44,7 +55,10 @@ List<AlternativeProductModel> _productsForTargetType(
       final key = code.isNotEmpty ? code.toLowerCase() : name.toLowerCase();
       final existing = entries[key];
       if (existing != null &&
-          (existing.baseUom.isNotEmpty || existing.unitPrice > 0)) {
+          (existing.baseUom.isNotEmpty ||
+              existing.unitPrice > 0 ||
+              existing.stock > 0 ||
+              existing.qtyLimit > 0)) {
         continue;
       }
       entries[key] = (
@@ -52,6 +66,8 @@ List<AlternativeProductModel> _productsForTargetType(
         name: name,
         baseUom: target.baseUomAt(i),
         unitPrice: target.retailPriceAt(i),
+        stock: target.currentStockAt(i),
+        qtyLimit: target.quantityLimitAt(i),
       );
     }
   }
@@ -69,6 +85,8 @@ List<AlternativeProductModel> _productsForTargetType(
         idPrefix: idPrefix,
         baseUom: uniqueEntries[i].baseUom,
         unitPrice: uniqueEntries[i].unitPrice,
+        stock: uniqueEntries[i].stock,
+        qtyLimit: uniqueEntries[i].qtyLimit,
       ),
   ];
 }

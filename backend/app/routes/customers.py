@@ -1068,12 +1068,12 @@ def update_customer(cust_code: str):
                 return jsonify({"error": "Customer not found after update"}), 404
             data = row_to_dict(cursor, row)
             get_connection().commit()
-    except Exception as exc:  # noqa: BLE001 — surface Oracle errors to the client
+    except Exception:  # noqa: BLE001
         try:
             get_connection().rollback()
         except Exception:  # noqa: BLE001
             pass
-        return jsonify({"error": f"Failed to update customer: {exc}"}), 500
+        return jsonify({"error": "Failed to update customer"}), 500
 
     return jsonify(data)
 

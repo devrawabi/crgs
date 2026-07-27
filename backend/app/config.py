@@ -1,26 +1,28 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 
 class Config:
-    SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
+    SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
     CORS_ORIGINS = [
         origin.strip()
         for origin in os.getenv(
-            "CORS_ORIGINS", "http://192.168.61.41:5173,http://192.168.61.41:8080"
+            "CORS_ORIGINS",
+            "https://crgs.rfoodinternational.com,http://127.0.0.1:5317,http://localhost:5317",
         ).split(",")
         if origin.strip()
     ]
 
-    ORACLE_USER = os.getenv("ORACLE_USER", "RFSS")
-    ORACLE_PASSWORD = os.getenv("ORACLE_PASSWORD", "rfss")
-    ORACLE_DSN = os.getenv("ORACLE_DSN", "192.168.1.225:1521/rgc")
+    ORACLE_USER = os.getenv("ORACLE_USER", "").strip()
+    ORACLE_PASSWORD = os.getenv("ORACLE_PASSWORD", "")
+    ORACLE_DSN = os.getenv("ORACLE_DSN", "").strip()
     ORACLE_CUSTOMERS_VIEW = os.getenv("ORACLE_CUSTOMERS_VIEW", "CUSTOMERS")
     ORACLE_CUSTOMER_AGE_VIEW = os.getenv("ORACLE_CUSTOMER_AGE_VIEW", "CUSTOMERAGEVIEW")
-    # Default "missing" window (days). A customer is missing when never billed,
-    # or last bill age >= this many days (0 = not billed today).
     MISSING_DAYS = int(os.getenv("MISSING_DAYS", "30"))
     ORACLE_BILLHDR_TABLE = os.getenv("ORACLE_BILLHDR_TABLE", "BILLHDR")
     ORACLE_BILLDTL_TABLE = os.getenv("ORACLE_BILLDTL_TABLE", "BILLDTL")
@@ -59,5 +61,18 @@ class Config:
     )
     ORACLE_CLIENT_LIB_DIR = os.getenv("ORACLE_CLIENT_LIB_DIR", "")
 
-    FLASK_ENV = os.getenv("FLASK_ENV", "development")
-    CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL", "").lower() in ("1", "true", "yes")
+    FLASK_ENV = os.getenv("FLASK_ENV", "production")
+    CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
+    JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+    JWT_ISSUER = os.getenv("JWT_ISSUER", "crgs-admin")
+    ADMIN_ROLE_CODES = [
+        code.strip()
+        for code in os.getenv("ADMIN_ROLE_CODES", "").split(",")
+        if code.strip()
+    ]
+    MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", str(10 * 1024 * 1024)))

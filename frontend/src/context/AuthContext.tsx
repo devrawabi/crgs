@@ -7,11 +7,13 @@ import {
   type ReactNode,
 } from 'react'
 import { loginUser } from '../api/auth'
+import { clearAuthStorage, setAccessToken } from '../api/client'
 
 export interface AuthUser {
   employeeCode: string
   name: string
-  role: 'admin'
+  roleCode: string
+  role: string
 }
 
 interface AuthContextValue {
@@ -26,6 +28,10 @@ const STORAGE_KEY = 'crgs-admin-session'
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+function mapRole(roleCode: string): string {
+  return roleCode || 'user'
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -33,9 +39,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) setUser(JSON.parse(stored) as AuthUser)
+      const token = localStorage.getItem('crgs-admin-token')
+      if (stored && token) {
+        setUser(JSON.parse(stored) as AuthUser)
+      } else {
+        clearAuthStorage()
+      }
     } catch {
-      localStorage.removeItem(STORAGE_KEY)
+      clearAuthStorage()
     }
     setIsLoading(false)
   }, [])
@@ -46,11 +57,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         employeeCode: employeeCode.trim(),
         password,
       })
+      if (!data.token) {
+        return { success: false, error: 'Login response missing token' }
+      }
+      const roleCode = String(data.roleCode ?? '').trim()
       const authUser: AuthUser = {
         employeeCode: data.employeeCode,
         name: data.username,
-        role: 'admin',
+        roleCode,
+        role: mapRole(roleCode),
       }
+      setAccessToken(data.token)
       setUser(authUser)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(authUser))
       return { success: true }
@@ -63,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     setUser(null)
-    localStorage.removeItem(STORAGE_KEY)
+    clearAuthStorage()
   }, [])
 
   return (

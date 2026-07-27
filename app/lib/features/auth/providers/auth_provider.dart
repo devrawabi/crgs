@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../core/providers/core_providers.dart';
 import '../../../data/models/models.dart';
@@ -43,26 +44,33 @@ class AuthState {
 }
 
 class AuthNotifier extends StateNotifier<AuthState> {
-  AuthNotifier(this._repository, this._storage)
+  AuthNotifier(this._repository, this._storage, this._apiClient)
       : super(const AuthState(isRestoring: true)) {
     _restoreSession();
   }
 
   final AuthRepository _repository;
   final AuthSessionStorage _storage;
+  final ApiClient _apiClient;
 
   Future<void> _restoreSession() async {
     final savedUser = await _storage.loadUser();
-    if (savedUser != null) {
+    if (savedUser != null &&
+        savedUser.accessToken != null &&
+        savedUser.accessToken!.isNotEmpty) {
+      _apiClient.setAuthToken(savedUser.accessToken);
       state = AuthState(
         user: savedUser,
         isAuthenticated: true,
         rememberMe: true,
+        isRestoring: false,
       );
       return;
     }
 
-    state = state.copyWith(isRestoring: false);
+    await _storage.clear();
+    _apiClient.setAuthToken(null);
+    state = state.copyWith(isRestoring: false, isAuthenticated: false);
   }
 
   Future<bool> login({
@@ -77,6 +85,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
         employeeCode: employeeId.trim(),
         password: password,
       );
+
+      if (user.accessToken == null || user.accessToken!.isEmpty) {
+        state = state.copyWith(
+          isLoading: false,
+          error: 'Login response missing token',
+        );
+        return false;
+      }
+
+      _apiClient.setAuthToken(user.accessToken);
 
       if (rememberMe) {
         await _storage.saveUser(user);
@@ -107,7 +125,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   Future<void> logout() async {
     await _storage.clear();
-    state = const AuthState();
+    _apiClient.setAuthToken(null);
+    state = const AuthState(isRestoring: false);
   }
 
   Future<void> completeOnboarding() async {
@@ -137,6 +156,7 @@ final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
   return AuthNotifier(
     ref.watch(authRepositoryProvider),
     ref.watch(authSessionStorageProvider),
+    ref.watch(apiClientProvider),
   );
 });
 

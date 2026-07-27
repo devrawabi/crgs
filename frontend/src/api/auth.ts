@@ -6,10 +6,15 @@ export interface LoginPayload {
 }
 
 export interface LoginResponse {
+  token: string
+  tokenType: string
+  expiresInHours: number
   username: string
   employeeCode: string
-  roleCode: number
+  roleCode: string | number
   flag: string
+  route?: string | null
+  onboardFlag?: string | null
 }
 
 export function loginUser(payload: LoginPayload) {

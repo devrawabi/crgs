@@ -1,26 +1,18 @@
-import 'package:flutter/foundation.dart';
-
-/// Backend API base URL — same Flask service as CRGS-Admin web portal.
+/// Backend API base URL — CRGS Cloudflare Tunnel API.
 ///
-/// Override at build/run time:
-/// `flutter run --dart-define=API_BASE_URL=http://192.168.61.41:5000/api`
+/// Production default:
+///   https://crgs-api.rfoodinternational.com/api
+///
+/// Local override example:
+///   flutter run --dart-define=API_BASE_URL=http://192.168.61.41:5318/api
+///   flutter build apk --dart-define=API_BASE_URL=https://crgs-api.rfoodinternational.com/api
 abstract final class ApiConfig {
-  static const String _host = '192.168.61.41';
-  static const String _apiBase = 'http://$_host:5000/api';
+  static const String productionApi =
+      'https://crgs-api.rfoodinternational.com/api';
 
   static String get baseUrl {
     const envUrl = String.fromEnvironment('API_BASE_URL');
     if (envUrl.isNotEmpty) return envUrl;
-
-    if (kIsWeb) {
-      return _apiBase;
-    }
-
-    switch (defaultTargetPlatform) {
-      case TargetPlatform.android:
-        return _apiBase;
-      default:
-        return _apiBase;
-    }
+    return productionApi;
   }
 }

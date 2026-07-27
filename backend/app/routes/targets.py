@@ -156,7 +156,7 @@ def _fetch_item_details(
     binds = {f"c{i}": code for i, code in enumerate(unique)}
     in_clause = ", ".join(f":c{i}" for i in range(len(unique)))
     query = f"""
-        SELECT ITEMCODE, ITEMNAME, BASEUOM, RETAILPRICE
+        SELECT ITEMCODE, ITEMNAME, BASEUOM, RETAILPRICE, CURRENTSTOCK, QUANTITYLIMIT
         FROM {itemmaster_table}
         WHERE TO_CHAR(ITEMCODE) IN ({in_clause})
     """
@@ -176,10 +176,28 @@ def _fetch_item_details(
                 retail_price = float(retail_raw) if retail_raw is not None else 0.0
             except (TypeError, ValueError):
                 retail_price = 0.0
+            try:
+                current_stock = (
+                    float(item.get("currentstock"))
+                    if item.get("currentstock") is not None
+                    else 0.0
+                )
+            except (TypeError, ValueError):
+                current_stock = 0.0
+            try:
+                quantity_limit = (
+                    float(item.get("quantitylimit"))
+                    if item.get("quantitylimit") is not None
+                    else 0.0
+                )
+            except (TypeError, ValueError):
+                quantity_limit = 0.0
             details[code] = {
                 "name": name or code,
                 "baseUom": base_uom,
                 "retailPrice": retail_price,
+                "currentStock": current_stock,
+                "quantityLimit": quantity_limit,
             }
     return details
 
@@ -206,6 +224,24 @@ def _resolve_product_retail_prices(
     ]
 
 
+def _resolve_product_current_stocks(
+    codes: list[str], details_map: dict[str, dict]
+) -> list[float]:
+    return [
+        float(details_map.get(code, {}).get("currentStock") or 0)
+        for code in codes
+    ]
+
+
+def _resolve_product_quantity_limits(
+    codes: list[str], details_map: dict[str, dict]
+) -> list[float]:
+    return [
+        float(details_map.get(code, {}).get("quantityLimit") or 0)
+        for code in codes
+    ]
+
+
 def _enrich_product_targets(data: list[dict], itemmaster_table: str) -> None:
     all_codes = [code for item in data for code in item.get("products", [])]
     details_map = _fetch_item_details(itemmaster_table, all_codes)
@@ -215,6 +251,10 @@ def _enrich_product_targets(data: list[dict], itemmaster_table: str) -> None:
         item["productNames"] = _resolve_product_names(codes, names_map)
         item["baseUoms"] = _resolve_product_base_uoms(codes, details_map)
         item["retailPrices"] = _resolve_product_retail_prices(codes, details_map)
+        item["currentStocks"] = _resolve_product_current_stocks(codes, details_map)
+        item["quantityLimits"] = _resolve_product_quantity_limits(
+            codes, details_map
+        )
 
 
 def _normalize_product_type(value: str) -> str | None:

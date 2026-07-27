@@ -43,10 +43,9 @@ class ItemsRepository {
     final code = json['itemcode']?.toString().trim() ?? '';
     final name = json['itemname']?.toString().trim() ?? '';
     final baseUom = json['baseuom']?.toString().trim() ?? '';
-    final retailRaw = json['retailprice'];
-    final unitPrice = retailRaw is num
-        ? retailRaw.toDouble()
-        : double.tryParse(retailRaw?.toString() ?? '') ?? 0;
+    final unitPrice = _toDouble(json['retailprice']);
+    final stock = _toDouble(json['currentstock']);
+    final qtyLimit = _toDouble(json['quantitylimit']);
 
     return AlternativeProductModel(
       id: code.isNotEmpty ? code : name,
@@ -56,6 +55,13 @@ class ItemsRepository {
       category: 'All Products',
       baseUom: baseUom,
       unitPrice: unitPrice,
+      stock: stock,
+      qtyLimit: qtyLimit,
     );
+  }
+
+  static double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
   }
 }

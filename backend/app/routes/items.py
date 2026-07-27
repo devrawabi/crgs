@@ -4,7 +4,14 @@ from app.db import oracle_cursor, row_to_dict
 
 items_bp = Blueprint("items", __name__)
 
-ITEM_COLUMNS = ("ITEMCODE", "ITEMNAME", "BASEUOM", "RETAILPRICE")
+ITEM_COLUMNS = (
+    "ITEMCODE",
+    "ITEMNAME",
+    "BASEUOM",
+    "RETAILPRICE",
+    "CURRENTSTOCK",
+    "QUANTITYLIMIT",
+)
 
 
 @items_bp.get("")
@@ -61,6 +68,12 @@ def list_items():
                 )
             except (TypeError, ValueError):
                 item["retailprice"] = 0.0
+            for numeric_key in ("currentstock", "quantitylimit"):
+                raw = item.get(numeric_key)
+                try:
+                    item[numeric_key] = float(raw) if raw is not None else 0.0
+                except (TypeError, ValueError):
+                    item[numeric_key] = 0.0
 
     return jsonify(
         {

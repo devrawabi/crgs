@@ -38,6 +38,8 @@ class _ProductViewItem {
     required this.unitPrice,
     required this.kind,
     this.baseUom = '',
+    this.stock = 0,
+    this.qtyLimit = 0,
     this.quantity,
   });
 
@@ -48,8 +50,12 @@ class _ProductViewItem {
   final String category;
   final double unitPrice;
   final String baseUom;
+  final double stock;
+  final double qtyLimit;
   final _ProductKind kind;
   final double? quantity;
+
+  bool get hasQtyLimit => qtyLimit > 0;
 
   String get uomPriceLabel {
     final uom = baseUom.trim().isNotEmpty
@@ -68,6 +74,18 @@ class _ProductViewItem {
     if (uom.isNotEmpty) return uom;
     if (price.isNotEmpty) return price;
     return '';
+  }
+
+  String get stockLimitLabel {
+    final stockValue = stock % 1 == 0
+        ? stock.toStringAsFixed(0)
+        : stock.toStringAsFixed(2);
+    final stockLabel = 'Stock $stockValue';
+    if (!hasQtyLimit) return stockLabel;
+    final limitValue = qtyLimit % 1 == 0
+        ? qtyLimit.toStringAsFixed(0)
+        : qtyLimit.toStringAsFixed(2);
+    return '$stockLabel · Max $limitValue';
   }
 
   static _ProductViewItem fromOrdered(OrderedProductModel product) =>
@@ -97,6 +115,8 @@ class _ProductViewItem {
         category: alt.category,
         unitPrice: alt.unitPrice,
         baseUom: alt.baseUom,
+        stock: alt.stock,
+        qtyLimit: alt.qtyLimit,
         kind: kind,
       );
 
@@ -109,6 +129,8 @@ class _ProductViewItem {
         category: alt.category,
         unitPrice: alt.unitPrice,
         baseUom: alt.baseUom,
+        stock: alt.stock,
+        qtyLimit: alt.qtyLimit,
         kind: _ProductKind.own,
       );
 }
@@ -224,7 +246,17 @@ class _ProductDetailSheetState extends ConsumerState<ProductDetailSheet> {
   void _adjustQty(String productId, double delta, {double fallback = 0}) {
     setState(() {
       final current = _cart[productId] ?? fallback;
-      final next = current + delta;
+      var next = current + delta;
+      _ProductViewItem? product;
+      for (final item in _allProducts) {
+        if (item.id == productId) {
+          product = item;
+          break;
+        }
+      }
+      if (product != null && product.hasQtyLimit && next > product.qtyLimit) {
+        next = product.qtyLimit;
+      }
       if (next <= 0) {
         _cart.remove(productId);
       } else {
@@ -947,11 +979,11 @@ class _ProductHeader extends StatelessWidget {
       _ProductKind.ordered =>
         '${item.category} · Qty ${item.quantity!.toStringAsFixed(0)} · ${CurrencyFormatter.format(item.unitPrice)}',
       _ProductKind.newPromotion =>
-        '${item.category} · New product · ${item.unitPrice > 0 ? CurrencyFormatter.format(item.unitPrice) : 'Tap to review'}',
+        '${item.category} · New product · ${item.unitPrice > 0 ? CurrencyFormatter.format(item.unitPrice) : 'Tap to review'} · ${item.stockLimitLabel}',
       _ProductKind.replacement =>
-        '${item.category} · Replacement · ${item.unitPrice > 0 ? CurrencyFormatter.format(item.unitPrice) : 'Tap to review'}',
+        '${item.category} · Replacement · ${item.unitPrice > 0 ? CurrencyFormatter.format(item.unitPrice) : 'Tap to review'} · ${item.stockLimitLabel}',
       _ProductKind.own =>
-        '${item.category} · Own product · ${item.unitPrice > 0 ? CurrencyFormatter.format(item.unitPrice) : 'Push on visit'}',
+        '${item.category} · Own product · ${item.unitPrice > 0 ? CurrencyFormatter.format(item.unitPrice) : 'Push on visit'} · ${item.stockLimitLabel}',
     };
 
     return ClipRRect(
@@ -1121,7 +1153,7 @@ class _SelectableProductCard extends StatelessWidget {
     required this.qty,
     required this.onTap,
     required this.onDecrease,
-    required this.onIncrease,
+    this.onIncrease,
   });
 
   final _ProductViewItem item;
@@ -1131,7 +1163,7 @@ class _SelectableProductCard extends StatelessWidget {
   final double qty;
   final VoidCallback onTap;
   final VoidCallback onDecrease;
-  final VoidCallback onIncrease;
+  final VoidCallback? onIncrease;
 
   @override
   Widget build(BuildContext context) {
@@ -1202,11 +1234,23 @@ class _SelectableProductCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                         if (item.uomPriceLabel.isNotEmpty) ...[
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 2),
                           Text(
                             item.uomPriceLabel,
                             style: theme.textTheme.muted.copyWith(
                               fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                        if (item.kind != _ProductKind.ordered) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            item.stockLimitLabel,
+                            style: theme.textTheme.muted.copyWith(
+                              fontSize: 10,
                               fontWeight: FontWeight.w500,
                             ),
                             maxLines: 1,
@@ -1315,22 +1359,24 @@ class _ProductCarouselSection extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         SizedBox(
-          height: 212,
+          height: 236,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: previewProducts.length,
             separatorBuilder: (_, _) => const SizedBox(width: 10),
             itemBuilder: (_, i) {
               final item = previewProducts[i];
+              final qty = cart[item.id] ?? 0;
+              final atLimit = item.hasQtyLimit && qty >= item.qtyLimit;
               return _SelectableProductCard(
                 item: item,
                 theme: theme,
                 accent: accent,
                 isSelected: item.id == selectedId,
-                qty: cart[item.id] ?? 0,
+                qty: qty,
                 onTap: () => onSelect(item.id),
                 onDecrease: () => onDecrease(item.id),
-                onIncrease: () => onIncrease(item.id),
+                onIncrease: atLimit ? null : () => onIncrease(item.id),
               );
             },
           ),
@@ -1388,6 +1434,7 @@ class _AllProductsSheetState extends State<_AllProductsSheet> {
         product.category,
         product.details,
         product.uomPriceLabel,
+        product.stockLimitLabel,
         product.baseUom,
       ].join(' ').toLowerCase();
       return haystack.contains(query);
@@ -1474,6 +1521,8 @@ class _AllProductsSheetState extends State<_AllProductsSheet> {
                         final product = filtered[index];
                         final qty = widget.cart[product.id] ?? 0;
                         final inCart = qty > 0;
+                        final atLimit =
+                            product.hasQtyLimit && qty >= product.qtyLimit;
                         final isSelected = product.id == widget.selectedId;
 
                         return Material(
@@ -1536,6 +1585,9 @@ class _AllProductsSheetState extends State<_AllProductsSheet> {
                                             if (product
                                                 .uomPriceLabel.isNotEmpty)
                                               product.uomPriceLabel,
+                                            if (product.kind !=
+                                                _ProductKind.ordered)
+                                              product.stockLimitLabel,
                                           ].join(' · '),
                                           style:
                                               theme.textTheme.muted.copyWith(
@@ -1569,8 +1621,10 @@ class _AllProductsSheetState extends State<_AllProductsSheet> {
                                       ),
                                       _QtyButton(
                                         icon: AppIcons.addCircle,
-                                        onPressed: () =>
-                                            widget.onIncrease(product.id),
+                                        onPressed: atLimit
+                                            ? null
+                                            : () => widget
+                                                .onIncrease(product.id),
                                       ),
                                     ],
                                   ),
@@ -1696,6 +1750,8 @@ class _CartSheet extends StatelessWidget {
                       itemBuilder: (_, index) {
                         final product = visibleProducts[index];
                         final qty = cart[product.id] ?? 0;
+                        final atLimit =
+                            product.hasQtyLimit && qty >= product.qtyLimit;
                         final lineAmount = product.unitPrice * qty;
                         final lineLabel = lineAmount > 0
                             ? CurrencyFormatter.format(
@@ -1748,6 +1804,9 @@ class _CartSheet extends StatelessWidget {
                                           'Added product',
                                         if (product.uomPriceLabel.isNotEmpty)
                                           product.uomPriceLabel,
+                                        if (product.kind !=
+                                            _ProductKind.ordered)
+                                          product.stockLimitLabel,
                                         if (lineLabel.isNotEmpty) lineLabel,
                                       ].join(' · '),
                                       style: theme.textTheme.muted.copyWith(
@@ -1776,7 +1835,9 @@ class _CartSheet extends StatelessWidget {
                                   ),
                                   _QtyButton(
                                     icon: AppIcons.addCircle,
-                                    onPressed: () => onIncrease(product.id),
+                                    onPressed: atLimit
+                                        ? null
+                                        : () => onIncrease(product.id),
                                   ),
                                 ],
                               ),

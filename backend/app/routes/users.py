@@ -1,6 +1,7 @@
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 from app.db import get_connection, oracle_cursor, row_to_dict
+from app.security.passwords import hash_password
 
 users_bp = Blueprint("users", __name__)
 
@@ -64,8 +65,22 @@ def list_users():
     return jsonify({"count": len(data), "users": data})
 
 
+def _require_admin_if_configured():
+    admin_roles = current_app.config.get("ADMIN_ROLE_CODES") or []
+    if not admin_roles:
+        return None
+    role = str(getattr(g, "current_user", {}).get("roleCode", "")).strip()
+    if role not in admin_roles:
+        return jsonify({"error": "Forbidden"}), 403
+    return None
+
+
 @users_bp.post("")
 def create_user():
+    denied = _require_admin_if_configured()
+    if denied is not None:
+        return denied
+
     payload = request.get_json(silent=True) or {}
     username = str(payload.get("username", "")).strip()
     employee_code = str(payload.get("employeeCode", "")).strip()
@@ -80,11 +95,14 @@ def create_user():
         return jsonify({"error": "Employee code is required"}), 400
     if not password:
         return jsonify({"error": "Password is required"}), 400
+    if len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
     if not role_code:
         return jsonify({"error": "Designation is required"}), 400
 
     table_name = _table_name()
     designation_table = _designation_table_name()
+    password_hash = hash_password(password)
 
     with oracle_cursor() as cursor:
         cursor.execute(
@@ -120,7 +138,7 @@ def create_user():
             {
                 "username": username,
                 "employeecode": employee_code,
-                "password": password,
+                "password": password_hash,
                 "rolecode": role_code,
                 "flag": ACTIVE_FLAG,
             },
@@ -143,6 +161,10 @@ def create_user():
 
 @users_bp.patch("/routes")
 def update_user_routes():
+    denied = _require_admin_if_configured()
+    if denied is not None:
+        return denied
+
     payload = request.get_json(silent=True) or {}
     employee_code = str(payload.get("employeeCode", "")).strip()
     route_nos = payload.get("routeNos")
@@ -184,6 +206,10 @@ def update_user_routes():
 
 @users_bp.patch("/status")
 def update_user_status():
+    denied = _require_admin_if_configured()
+    if denied is not None:
+        return denied
+
     payload = request.get_json(silent=True) or {}
     employee_code = str(payload.get("employeeCode", "")).strip()
     flag = str(payload.get("flag", "")).strip().upper()
