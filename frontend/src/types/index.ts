@@ -16,6 +16,7 @@ export type TaskType =
   | 'customer_visit_campaign'
   | 'own_products'
   | 'market_research'
+  | 'other'
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'overdue'
 
 export interface User {

@@ -900,6 +900,7 @@ class TaskModel {
         'customer_visit_campaign' => 'Customer Visit Campaign',
         'own_products' => 'Own Products',
         'market_research' => 'Market Research',
+        'other' => 'Other',
         _ => typeCode.isEmpty
             ? 'Task'
             : typeCode
@@ -924,6 +925,7 @@ class TaskModel {
           'Complete scheduled customer visits on the route',
         'own_products' => 'Push own products with customers on the route',
         'market_research' => 'Gather market research on the assigned route',
+        'other' => 'Complete the assigned task on the route',
         _ => 'Complete the assigned task on the route',
       };
 

@@ -57,6 +57,7 @@ const TASK_TYPES: { value: TaskType; label: string }[] = [
   { value: 'customer_visit_campaign', label: 'Customer Visit Campaign' },
   { value: 'own_products', label: 'Own Products' },
   { value: 'market_research', label: 'Market Research' },
+  { value: 'other', label: 'Other' },
 ]
 
 export function TasksPage() {

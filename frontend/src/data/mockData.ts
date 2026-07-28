@@ -281,6 +281,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   customer_visit_campaign: 'Customer Visit Campaign',
   own_products: 'Own Products',
   market_research: 'Market Research',
+  other: 'Other',
 }
 
 export const CUSTOMER_TARGET_LABELS: Record<string, string> = {

@@ -22,6 +22,7 @@ TASK_TYPES = {
     "customer_visit_campaign",
     "own_products",
     "market_research",
+    "other",
 }
 
 
