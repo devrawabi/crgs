@@ -3,19 +3,39 @@ import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../models/models.dart';
 
+class VisitsPage {
+  const VisitsPage({
+    required this.visits,
+    required this.offset,
+    required this.limit,
+    required this.hasMore,
+  });
+
+  final List<VisitRecordModel> visits;
+  final int offset;
+  final int limit;
+  final bool hasMore;
+}
+
 class VisitsRepository {
   VisitsRepository(this._client);
 
   final ApiClient _client;
 
-  /// Lists visit rows from Oracle `CRGS_VISITDETAILS`.
-  Future<List<VisitRecordModel>> fetchVisits({
+  static const int pageSize = 50;
+
+  /// One page from Oracle `CRGS_VISITDETAILS`.
+  Future<VisitsPage> fetchVisitsPage({
     String? employeeCode,
     String? customerCode,
+    int limit = pageSize,
+    int offset = 0,
   }) async {
     final response = await _client.get<Map<String, dynamic>>(
       ApiEndpoints.visits,
       queryParameters: {
+        'limit': limit,
+        'offset': offset,
         if (employeeCode != null && employeeCode.trim().isNotEmpty)
           'employeeCode': employeeCode.trim(),
         if (customerCode != null && customerCode.trim().isNotEmpty)
@@ -29,12 +49,43 @@ class VisitsRepository {
     }
 
     final visitsJson = data['visits'];
-    if (visitsJson is! List) return const [];
+    final visits = visitsJson is List
+        ? visitsJson
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  VisitRecordModel.fromJson(Map<String, dynamic>.from(item)),
+            )
+            .toList()
+        : const <VisitRecordModel>[];
 
-    return visitsJson
-        .whereType<Map>()
-        .map((item) => VisitRecordModel.fromJson(Map<String, dynamic>.from(item)))
-        .toList();
+    return VisitsPage(
+      visits: visits,
+      offset: (data['offset'] as num?)?.toInt() ?? offset,
+      limit: (data['limit'] as num?)?.toInt() ?? limit,
+      hasMore: data['has_more'] as bool? ?? visits.length >= limit,
+    );
+  }
+
+  /// Lists visit rows — walks pages so Activity / reports stay complete.
+  Future<List<VisitRecordModel>> fetchVisits({
+    String? employeeCode,
+    String? customerCode,
+  }) async {
+    final all = <VisitRecordModel>[];
+    var offset = 0;
+    for (var i = 0; i < 100; i++) {
+      final page = await fetchVisitsPage(
+        employeeCode: employeeCode,
+        customerCode: customerCode,
+        limit: pageSize,
+        offset: offset,
+      );
+      all.addAll(page.visits);
+      if (!page.hasMore || page.visits.isEmpty) break;
+      offset += page.limit;
+    }
+    return all;
   }
 
   /// Inserts a row into Oracle `CRGS_VISITDETAILS` when a visit starts.

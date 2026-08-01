@@ -26,24 +26,6 @@ extension AppThemeContext on BuildContext {
           ],
         )
       : AppDecorations.pageGradient;
-
-  BoxDecoration elevatedCardDecoration({
-    double radius = 14,
-    EdgeInsetsGeometry? padding,
-  }) {
-    return BoxDecoration(
-      color: surfaceCard,
-      borderRadius: BorderRadius.circular(radius),
-      border: Border.all(color: surfaceBorder),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: isDarkTheme ? 0.24 : 0.04),
-          blurRadius: 8,
-          offset: const Offset(0, 2),
-        ),
-      ],
-    );
-  }
 }
 
 /// Route Master palette — brand accents plus theme-aware surfaces.

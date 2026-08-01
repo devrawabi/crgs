@@ -7,7 +7,7 @@ import { Modal } from '../components/ui/Modal'
 import { Card } from '../components/ui/Card'
 import { Table } from '../components/ui/Table'
 import {
-  fetchContactInfo,
+  fetchAllContactInfo,
   type ContactInfoFlag,
   type DbContactInfo,
 } from '../api/customers'
@@ -62,7 +62,7 @@ export function CustomerRequestsPage() {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchContactInfo()
+      const data = await fetchAllContactInfo()
       setItems(data.items ?? [])
     } catch (err) {
       setItems([])

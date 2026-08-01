@@ -250,14 +250,29 @@ class PaginatedCustomersNotifier
       // Only apply if the user is still on this filter.
       final current = _ref.read(customerFilterProvider);
       if (current.listCacheKey != cacheKey) return;
+
+      // Preserve already-scrolled pages: refresh only the first page, keep the
+      // previously loaded tail so soft-refresh does not truncate the list.
+      final previous = _pageCache[cacheKey] ?? state;
+      final pageSize = page.limit > 0 ? page.limit : page.customers.length;
+      final previousTail = previous.customers.length > pageSize
+          ? previous.customers.sublist(pageSize)
+          : const <CustomerModel>[];
+      final freshIds = page.customers.map((c) => c.id).toSet();
+      final preservedTail = previousTail
+          .where((c) => !freshIds.contains(c.id))
+          .toList(growable: false);
+      final merged = [...page.customers, ...preservedTail];
+
       final next = PaginatedCustomersState(
-        customers: page.customers,
+        customers: merged,
         isLoading: false,
-        hasMore: page.hasMore,
+        // If we kept a tail, trust prior hasMore until the next loadMore.
+        hasMore: preservedTail.isEmpty ? page.hasMore : previous.hasMore,
       );
       _storeCache(cacheKey, next);
       state = next;
-      _ref.read(loadedCustomersProvider.notifier).state = page.customers;
+      _ref.read(loadedCustomersProvider.notifier).state = merged;
     } catch (_) {
       // Keep cached UI on soft-refresh failure.
     }

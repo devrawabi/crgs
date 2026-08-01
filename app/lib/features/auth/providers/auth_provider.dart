@@ -46,6 +46,7 @@ class AuthState {
 class AuthNotifier extends StateNotifier<AuthState> {
   AuthNotifier(this._repository, this._storage, this._apiClient)
       : super(const AuthState(isRestoring: true)) {
+    _apiClient.setUnauthorizedHandler(_handleUnauthorized);
     _restoreSession();
   }
 
@@ -53,23 +54,41 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final AuthSessionStorage _storage;
   final ApiClient _apiClient;
 
+  Future<void> _handleUnauthorized() async {
+    // Already logged out / idle — nothing to clear.
+    if (!state.isAuthenticated && !state.isRestoring) return;
+    await logout();
+  }
+
   Future<void> _restoreSession() async {
     final savedUser = await _storage.loadUser();
     if (savedUser != null &&
         savedUser.accessToken != null &&
         savedUser.accessToken!.isNotEmpty) {
       _apiClient.setAuthToken(savedUser.accessToken);
-      state = AuthState(
-        user: savedUser,
-        isAuthenticated: true,
-        rememberMe: true,
-        isRestoring: false,
-      );
-      return;
+      try {
+        // Deep check: confirm token is still valid before trusting local session.
+        await _repository.fetchMe();
+        if (!mounted) return;
+        state = AuthState(
+          user: savedUser,
+          isAuthenticated: true,
+          rememberMe: true,
+          isRestoring: false,
+        );
+        return;
+      } catch (_) {
+        await _storage.clear();
+        _apiClient.setAuthToken(null);
+        if (!mounted) return;
+        state = const AuthState(isRestoring: false);
+        return;
+      }
     }
 
     await _storage.clear();
     _apiClient.setAuthToken(null);
+    if (!mounted) return;
     state = state.copyWith(isRestoring: false, isAuthenticated: false);
   }
 
@@ -126,6 +145,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> logout() async {
     await _storage.clear();
     _apiClient.setAuthToken(null);
+    if (!mounted) return;
     state = const AuthState(isRestoring: false);
   }
 

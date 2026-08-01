@@ -1,8 +1,9 @@
 import { apiDelete, apiGet, apiPatch, apiPost } from './client'
 import type { TaskType } from '../types'
+import { fetchAllPages } from './paginate'
 
 export interface DbTask {
-  type: TaskType
+  type: TaskType | string
   employeeCode: string
   routeNo: string
   status: string
@@ -11,32 +12,61 @@ export interface DbTask {
 
 export interface TasksResponse {
   count: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   tasks: DbTask[]
 }
 
 export interface CreateTaskPayload {
-  type: TaskType
+  type: TaskType | string
+  /** Custom label when Task Type is Other; stored in CRGS_TASK.TYPE */
+  otherType?: string
   employeeCode: string
   routeNo: string
   dueDate: string
 }
 
 export interface CreateTaskResponse {
-  type: TaskType
+  type: TaskType | string
   employeeCode: string
   routeNo: string
   dueDate: string
 }
 
 export interface DeleteTaskPayload {
-  type: TaskType
+  type: TaskType | string
   employeeCode: string
   routeNo: string
   dueDate: string
 }
 
-export function fetchTasks(params?: { employeeCode?: string }) {
-  return apiGet<TasksResponse>('/api/tasks', params)
+export interface FetchTasksParams {
+  employeeCode?: string
+  type?: TaskType | string
+  limit?: number
+  offset?: number
+}
+
+export function fetchTasks(params: FetchTasksParams = {}) {
+  return apiGet<TasksResponse>('/api/tasks', {
+    employeeCode: params.employeeCode,
+    type: params.type,
+    limit: params.limit ?? 100,
+    offset: params.offset ?? 0,
+  })
+}
+
+export async function fetchAllTasks(
+  params: Omit<FetchTasksParams, 'limit' | 'offset'> = {}
+) {
+  const tasks = await fetchAllPages<DbTask>({
+    pageSize: 500,
+    itemsKey: 'tasks',
+    fetchPage: ({ limit, offset }) =>
+      fetchTasks({ ...params, limit, offset }) as Promise<Record<string, unknown>>,
+  })
+  return { count: tasks.length, tasks }
 }
 
 export function createTask(payload: CreateTaskPayload) {
@@ -48,7 +78,7 @@ export function deleteTask(payload: DeleteTaskPayload) {
 }
 
 export interface UpdateTaskStatusPayload {
-  type: TaskType
+  type: TaskType | string
   employeeCode: string
   routeNo: string
   dueDate: string
@@ -56,7 +86,7 @@ export interface UpdateTaskStatusPayload {
 }
 
 export interface UpdateTaskStatusResponse {
-  type: TaskType
+  type: TaskType | string
   employeeCode: string
   routeNo: string
   dueDate: string

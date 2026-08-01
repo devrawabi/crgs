@@ -27,33 +27,19 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { Table } from '../components/ui/Table'
 import { formatCurrency, formatPercent } from '../context/AppContext'
 import {
-  fetchSalesTargets,
-  fetchProductTargets,
-  fetchCustomerTargets,
-  type DbSalesTarget,
-  type DbProductTarget,
-  type DbCustomerTarget,
-} from '../api/targets'
-import {
-  fetchUsers,
-  parseRouteColumn,
-  type DbLoginUser,
-} from '../api/users'
-import { fetchTasks, type DbTask } from '../api/tasks'
+  fetchDashboardSummary,
+  type DashboardSummary,
+} from '../api/dashboard'
 import { STATUS_COLORS, TASK_TYPE_LABELS } from '../data/mockData'
 
 const COLORS = ['#00766e', '#16a34a', '#f59e0b', '#ef4444', '#8b5cf6']
 
-function displayName(username: string) {
-  return username.split('.')[0] ?? username
-}
-
-function isOverdueTask(task: DbTask) {
-  const status = (task.status || '').toLowerCase()
-  if (status === 'overdue') return true
-  if (status === 'completed' || status === 'done') return false
-  if (!task.dueDate) return false
-  const due = new Date(task.dueDate.slice(0, 10))
+function isOverdueTaskStatus(status: string, dueDate: string) {
+  const normalized = (status || '').toLowerCase()
+  if (normalized === 'overdue') return true
+  if (normalized === 'completed' || normalized === 'done') return false
+  if (!dueDate) return false
+  const due = new Date(dueDate.slice(0, 10))
   if (Number.isNaN(due.getTime())) return false
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -61,11 +47,7 @@ function isOverdueTask(task: DbTask) {
 }
 
 export function DashboardPage() {
-  const [executives, setExecutives] = useState<DbLoginUser[]>([])
-  const [salesTargets, setSalesTargets] = useState<DbSalesTarget[]>([])
-  const [productTargets, setProductTargets] = useState<DbProductTarget[]>([])
-  const [customerTargets, setCustomerTargets] = useState<DbCustomerTarget[]>([])
-  const [tasks, setTasks] = useState<DbTask[]>([])
+  const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -73,26 +55,11 @@ export function DashboardPage() {
     setLoading(true)
     setError(null)
     try {
-      const [usersRes, salesRes, productRes, customerRes, tasksRes] =
-        await Promise.all([
-          fetchUsers({ activeOnly: true }),
-          fetchSalesTargets(),
-          fetchProductTargets(),
-          fetchCustomerTargets(),
-          fetchTasks(),
-        ])
-      setExecutives(usersRes.users)
-      setSalesTargets(salesRes.targets)
-      setProductTargets(productRes.targets)
-      setCustomerTargets(customerRes.targets)
-      setTasks(tasksRes.tasks)
+      const data = await fetchDashboardSummary()
+      setSummary(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard')
-      setExecutives([])
-      setSalesTargets([])
-      setProductTargets([])
-      setCustomerTargets([])
-      setTasks([])
+      setSummary(null)
     } finally {
       setLoading(false)
     }
@@ -102,121 +69,31 @@ export function DashboardPage() {
     loadDashboard()
   }, [loadDashboard])
 
-  const executiveNameByCode = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const exec of executives) {
-      map.set(exec.employeecode.trim().toUpperCase(), exec.username)
-    }
-    return map
-  }, [executives])
-
-  const getExecutiveName = useCallback(
-    (employeeCode: string) => {
-      const code = employeeCode.trim().toUpperCase()
-      return executiveNameByCode.get(code) ?? employeeCode
-    },
-    [executiveNameByCode]
+  const achievementPct = formatPercent(
+    summary?.sales.achievedTotal ?? 0,
+    summary?.sales.targetTotal ?? 0
   )
-
-  const activeRoutes = useMemo(() => {
-    const routes = new Set<string>()
-    for (const exec of executives) {
-      for (const route of parseRouteColumn(exec.route)) {
-        routes.add(route)
-      }
-    }
-    return routes.size
-  }, [executives])
-
-  const monthlyTargets = useMemo(
-    () => salesTargets.filter((t) => t.period === 'monthly'),
-    [salesTargets]
+  const productPct = formatPercent(
+    summary?.products.achievedTotal ?? 0,
+    summary?.products.targetTotal ?? 0
   )
-
-  const totalTarget = monthlyTargets.reduce((s, t) => s + t.targetAmount, 0)
-  const totalAchieved = monthlyTargets.reduce((s, t) => s + t.achievedAmount, 0)
-  const achievementPct = formatPercent(totalAchieved, totalTarget)
-
-  const productTargetTotal = productTargets.reduce((s, t) => s + t.targetValue, 0)
-  const productAchievedTotal = productTargets.reduce(
-    (s, t) => s + (t.achievedValue ?? 0),
-    0
+  const customerPct = formatPercent(
+    summary?.customers.achievedTotal ?? 0,
+    summary?.customers.targetTotal ?? 0
   )
-  const productPct = formatPercent(productAchievedTotal, productTargetTotal)
-
-  const customerTargetTotal = customerTargets.reduce((s, t) => s + t.targetCount, 0)
-  const customerAchievedTotal = customerTargets.reduce(
-    (s, t) => s + (t.achievedCount ?? 0),
-    0
-  )
-  const customerPct = formatPercent(customerAchievedTotal, customerTargetTotal)
-
-  const overdueTasks = tasks.filter(isOverdueTask).length
-
-  const execPerformance = useMemo(() => {
-    const byCode = new Map<string, { target: number; achieved: number }>()
-    for (const t of monthlyTargets) {
-      const code = t.employeeCode.trim().toUpperCase()
-      const current = byCode.get(code) ?? { target: 0, achieved: 0 }
-      current.target += t.targetAmount
-      current.achieved += t.achievedAmount
-      byCode.set(code, current)
-    }
-
-    return executives.map((exec) => {
-      const code = exec.employeecode.trim().toUpperCase()
-      const totals = byCode.get(code)
-      return {
-        name: displayName(exec.username),
-        target: totals?.target ?? 0,
-        achieved: totals?.achieved ?? 0,
-      }
-    })
-  }, [executives, monthlyTargets])
-
-  const routePerformance = useMemo(() => {
-    const byRoute = new Map<string, { target: number; achieved: number }>()
-    for (const t of monthlyTargets) {
-      const routes = parseRouteColumn(t.routeNo)
-      const routeKeys = routes.length > 0 ? routes : [t.routeNo || 'Unassigned']
-      for (const route of routeKeys) {
-        const key = route || 'Unassigned'
-        const current = byRoute.get(key) ?? { target: 0, achieved: 0 }
-        current.target += t.targetAmount
-        current.achieved += t.achievedAmount
-        byRoute.set(key, current)
-      }
-    }
-    return Array.from(byRoute.entries())
-      .map(([name, values]) => ({
-        name,
-        target: values.target,
-        achieved: values.achieved,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  }, [monthlyTargets])
 
   const taskBreakdown = useMemo(
     () =>
-      Object.entries(
-        tasks.reduce<Record<string, number>>((acc, t) => {
-          acc[t.type] = (acc[t.type] ?? 0) + 1
-          return acc
-        }, {})
-      ).map(([type, count]) => ({
-        name: TASK_TYPE_LABELS[type]?.split(' ').slice(0, 2).join(' ') ?? type,
-        value: count,
+      (summary?.tasks.breakdown ?? []).map((row) => ({
+        name:
+          TASK_TYPE_LABELS[row.type]?.split(' ').slice(0, 2).join(' ') ??
+          row.type,
+        value: row.count,
       })),
-    [tasks]
+    [summary]
   )
 
-  const recentTasks = useMemo(
-    () =>
-      [...tasks]
-        .sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || ''))
-        .slice(0, 5),
-    [tasks]
-  )
+  const recentTasks = summary?.tasks.recent ?? []
 
   return (
     <div className="flex-1 overflow-auto min-h-0">
@@ -236,40 +113,40 @@ export function DashboardPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-6">
             <StatCard
               label="Active Executives"
-              value={executives.length}
+              value={summary?.activeExecutives ?? 0}
               icon={<Users size={20} />}
             />
             <StatCard
               label="Assigned Routes"
-              value={activeRoutes}
+              value={summary?.assignedRoutes ?? 0}
               icon={<MapPin size={20} />}
             />
             <StatCard
               label="Monthly Sales Achievement"
               value={`${achievementPct}%`}
-              change={`${formatCurrency(totalAchieved)} of ${formatCurrency(totalTarget)}`}
+              change={`${formatCurrency(summary?.sales.achievedTotal ?? 0)} of ${formatCurrency(summary?.sales.targetTotal ?? 0)}`}
               positive={achievementPct >= 70}
               icon={<TrendingUp size={20} />}
             />
             <StatCard
               label="Product Target Achievement"
               value={`${productPct}%`}
-              change={`${productAchievedTotal} of ${productTargetTotal}`}
+              change={`${summary?.products.achievedTotal ?? 0} of ${summary?.products.targetTotal ?? 0}`}
               positive={productPct >= 70}
               icon={<Package size={20} />}
             />
             <StatCard
               label="Customer Target Achievement"
               value={`${customerPct}%`}
-              change={`${customerAchievedTotal} of ${customerTargetTotal}`}
+              change={`${summary?.customers.achievedTotal ?? 0} of ${summary?.customers.targetTotal ?? 0}`}
               positive={customerPct >= 70}
               icon={<UserPlus size={20} />}
             />
             <StatCard
               label="Overdue Tasks"
-              value={overdueTasks}
-              change={`${tasks.length} total tasks`}
-              positive={overdueTasks === 0}
+              value={summary?.tasks.overdue ?? 0}
+              change={`${summary?.tasks.total ?? 0} total tasks`}
+              positive={(summary?.tasks.overdue ?? 0) === 0}
               icon={<ClipboardList size={20} />}
             />
           </div>
@@ -277,7 +154,7 @@ export function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <Card title="Executive Performance" subtitle="Monthly sales target vs achievement">
               <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={execPerformance}>
+                <BarChart data={summary?.sales.byExecutive ?? []}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                   <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `QAR ${v / 1000}K`} />
@@ -290,7 +167,7 @@ export function DashboardPage() {
 
             <Card title="Route Sales Performance" subtitle="Monthly target vs achievement by route">
               <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={routePerformance}>
+                <LineChart data={summary?.sales.byRoute ?? []}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                   <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `QAR ${v / 1000}K`} />
@@ -346,7 +223,7 @@ export function DashboardPage() {
                   </tr>
                 ) : (
                   recentTasks.map((task, index) => {
-                    const statusKey = isOverdueTask(task)
+                    const statusKey = isOverdueTaskStatus(task.status, task.dueDate)
                       ? 'overdue'
                       : (task.status || 'pending').toLowerCase().replace(/\s+/g, '_')
                     return (
@@ -358,7 +235,7 @@ export function DashboardPage() {
                           {TASK_TYPE_LABELS[task.type] ?? task.type}
                         </td>
                         <td className="px-4 py-3 text-gray-600">
-                          {getExecutiveName(task.employeeCode)}
+                          {task.executiveName || task.employeeCode}
                         </td>
                         <td className="px-4 py-3 text-gray-600">{task.routeNo || '—'}</td>
                         <td className="px-4 py-3">

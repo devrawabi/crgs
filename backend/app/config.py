@@ -28,6 +28,24 @@ class Config:
     ORACLE_BILLDTL_TABLE = os.getenv("ORACLE_BILLDTL_TABLE", "BILLDTL")
     ORACLE_ITEMMASTER_TABLE = os.getenv("ORACLE_ITEMMASTER_TABLE", "ITEMMASTER")
     ORACLE_ITEMMASTER_RATE_COLUMN = os.getenv("ORACLE_ITEMMASTER_RATE_COLUMN", "RATE")
+    # Timestamp column for delta product sync (e.g. LAST_UPDATED).
+    # Empty = auto-detect common column names; set explicitly after DBA DDL.
+    ORACLE_ITEMMASTER_UPDATED_COLUMN = os.getenv(
+        "ORACLE_ITEMMASTER_UPDATED_COLUMN", "LAST_UPDATED"
+    ).strip()
+    # Alternate UOMs (CTN / DZN / SET …) keyed by ITEMCODE.
+    ORACLE_ITEM_ALTERNATE_UOM_TABLE = os.getenv(
+        "ORACLE_ITEM_ALTERNATE_UOM_TABLE", "ITEMALTERNATEUOMMAP"
+    ).strip()
+    ORACLE_POOL_MIN = int(os.getenv("ORACLE_POOL_MIN", "4"))
+    ORACLE_POOL_MAX = int(os.getenv("ORACLE_POOL_MAX", "16"))
+    ORACLE_POOL_INCREMENT = int(os.getenv("ORACLE_POOL_INCREMENT", "2"))
+    ORACLE_POOL_TIMEOUT = int(os.getenv("ORACLE_POOL_TIMEOUT", "30"))
+    ORACLE_POOL_PING_INTERVAL = int(os.getenv("ORACLE_POOL_PING_INTERVAL", "60"))
+    # Recycle pooled sessions after N seconds (0 disables). Avoids stale listeners.
+    ORACLE_POOL_MAX_LIFETIME = int(os.getenv("ORACLE_POOL_MAX_LIFETIME", "3600"))
+    ORACLE_STMT_CACHE_SIZE = int(os.getenv("ORACLE_STMT_CACHE_SIZE", "30"))
+    ORACLE_CURSOR_ARRAYSIZE = int(os.getenv("ORACLE_CURSOR_ARRAYSIZE", "500"))
     ORACLE_ROUTES_TABLE = os.getenv("ORACLE_ROUTES_TABLE", "TBLROUTES")
     ORACLE_LOGIN_USERS_TABLE = os.getenv("ORACLE_LOGIN_USERS_TABLE", "CRGS_USER")
     ORACLE_DESIGNATION_TABLE = os.getenv(
@@ -67,12 +85,38 @@ class Config:
         "true",
         "yes",
     )
-    JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
+    # When true (Cloudflare tunnel), rate limits use CF-Connecting-IP only.
+    TRUST_PROXY = os.getenv("TRUST_PROXY", "true").lower() in ("1", "true", "yes")
+    JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "4"))
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
     JWT_ISSUER = os.getenv("JWT_ISSUER", "crgs-admin")
+    # Full admin portal (all tabs including Dashboard + User Management).
     ADMIN_ROLE_CODES = [
         code.strip()
-        for code in os.getenv("ADMIN_ROLE_CODES", "").split(",")
+        for code in os.getenv("ADMIN_ROLE_CODES", "1,3,4,6,8").split(",")
         if code.strip()
     ]
+    # Manager portal: all tabs except Dashboard + User Management.
+    MANAGER_ROLE_CODES = [
+        code.strip()
+        for code in os.getenv("MANAGER_ROLE_CODES", "2,5").split(",")
+        if code.strip()
+    ]
+    # Call Center only (single tab).
+    CALL_CENTER_ROLE_CODES = [
+        code.strip()
+        for code in os.getenv("CALL_CENTER_ROLE_CODES", "9").split(",")
+        if code.strip()
+    ]
+    # Require configured admin roles outside development.
+    REQUIRE_ADMIN_ROLES = os.getenv("REQUIRE_ADMIN_ROLES", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
+    ALLOW_LEGACY_PLAINTEXT_PASSWORDS = os.getenv(
+        "ALLOW_LEGACY_PLAINTEXT_PASSWORDS", "false"
+    ).lower() in ("1", "true", "yes")
     MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", str(10 * 1024 * 1024)))
+    SECRET_KEY_MIN_LENGTH = int(os.getenv("SECRET_KEY_MIN_LENGTH", "32"))

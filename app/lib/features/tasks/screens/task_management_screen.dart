@@ -91,12 +91,18 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
     final content = switch (_selectedTab) {
       _TaskTab.all => _TaskListView(
           emptyMessage: 'No pending tasks',
+          hasMore: tasksState.hasMore,
+          isLoadingMore: tasksState.isLoadingMore,
+          onLoadMore: () => ref.read(tasksProvider.notifier).loadMore(),
           children: activeTasks
               .map((task) => _TaskCard(task: task, ref: ref))
               .toList(),
         ),
       _TaskTab.completed => _TaskListView(
           emptyMessage: 'No completed tasks yet',
+          hasMore: tasksState.hasMore,
+          isLoadingMore: tasksState.isLoadingMore,
+          onLoadMore: () => ref.read(tasksProvider.notifier).loadMore(),
           children: completedTasks
               .map((task) => _TaskCard(task: task, ref: ref))
               .toList(),
@@ -249,22 +255,50 @@ class _TaskListView extends StatelessWidget {
   const _TaskListView({
     required this.children,
     required this.emptyMessage,
+    this.hasMore = false,
+    this.isLoadingMore = false,
+    this.onLoadMore,
   });
 
   final List<Widget> children;
   final String emptyMessage;
+  final bool hasMore;
+  final bool isLoadingMore;
+  final Future<void> Function()? onLoadMore;
 
   @override
   Widget build(BuildContext context) {
-    if (children.isEmpty) {
+    if (children.isEmpty && !hasMore) {
       return _EmptyTabState(message: emptyMessage);
     }
 
+    final showFooter = hasMore || isLoadingMore;
+    final itemCount = children.length + (showFooter ? 1 : 0);
+
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-      itemCount: children.length,
+      itemCount: itemCount,
       separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (_, index) => children[index],
+      itemBuilder: (_, index) {
+        if (index < children.length) return children[index];
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Center(
+            child: isLoadingMore
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : TextButton(
+                    onPressed: onLoadMore == null
+                        ? null
+                        : () => onLoadMore!(),
+                    child: const Text('Load more tasks'),
+                  ),
+          ),
+        );
+      },
     );
   }
 }
@@ -504,15 +538,6 @@ class _TaskCard extends ConsumerWidget {
                         : AppIcons.noteAdd,
                     size: 18,
                   ),
-                ),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Evidence upload ready')),
-                    );
-                  },
-                  icon: const Icon(AppIcons.upload, size: 18),
                 ),
               ],
             ),

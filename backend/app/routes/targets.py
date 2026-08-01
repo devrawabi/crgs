@@ -3,6 +3,9 @@ from datetime import datetime
 from flask import Blueprint, current_app, jsonify, request
 
 from app.db import get_connection, oracle_cursor, row_to_dict
+from app.pagination import apply_has_more, parse_limit_offset, rownum_page_sql
+from app.routes.auth import limiter
+from app.security import is_admin, require_admin, resolve_employee_scope
 from app.services.customer_target_achievement import (
     count_new_customers_flag_n,
     refresh_new_acquisition_achieved,
@@ -10,6 +13,24 @@ from app.services.customer_target_achievement import (
 from app.services.sales_target_achievement import refresh_sales_target_achieved
 
 targets_bp = Blueprint("targets", __name__)
+
+_DEFAULT_LIMIT = 200
+_MAX_LIMIT = 500
+
+
+def _wants_refresh_achieved() -> bool:
+    # Expensive ACHIEVED rebuild — admin only.
+    if not is_admin():
+        return False
+    return request.args.get("refreshAchieved", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _scoped_employee_arg() -> tuple[str | None, tuple | None]:
+    return resolve_employee_scope(request.args.get("employeeCode", "").strip())
 
 
 def _order_hdr_table():
@@ -327,7 +348,8 @@ def _build_target_filters(
     params: dict = {}
 
     if employee_code:
-        conditions.append(f"TRIM(TO_CHAR({employee_column})) = :employeecode")
+        # CRGS_* EMPLOYEECODE columns are VARCHAR2 — avoid TO_CHAR (blocks indexes).
+        conditions.append(f"TRIM({employee_column}) = :employeecode")
         params["employeecode"] = employee_code
 
     if period:
@@ -338,38 +360,57 @@ def _build_target_filters(
 
 
 @targets_bp.get("/sales")
+@limiter.limit("90 per minute")
 def list_sales_targets():
+    """List sales targets (paginated)."""
     table_name = _table_name()
     columns_sql = ", ".join(SALE_TARGET_COLUMNS)
-    employee_code = request.args.get("employeeCode", "").strip()
+    employee_code, scope_err = _scoped_employee_arg()
+    if scope_err is not None:
+        return scope_err
     period = _normalize_period(request.args.get("period", ""))
-    conditions, params = _build_target_filters(employee_code, period)
+    limit, offset = parse_limit_offset(
+        default_limit=_DEFAULT_LIMIT,
+        max_limit=_MAX_LIMIT,
+    )
+    conditions, params = _build_target_filters(employee_code or "", period)
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    with oracle_cursor() as cursor:
-        cursor.execute(
-            f"""
-            SELECT {columns_sql}
-            FROM {table_name}
-            {where_sql}
-            ORDER BY DUEDATE DESC, EMPLOYEECODE, ROUTE
-            """,
-            params,
-        )
-        rows = cursor.fetchall()
-        data = [_serialize_target(row_to_dict(cursor, row)) for row in rows]
+    inner_sql = f"""
+        SELECT {columns_sql}
+        FROM {table_name}
+        {where_sql}
+        ORDER BY DUEDATE DESC, EMPLOYEECODE, ROUTE
+    """
+    query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
+    params["max_row"] = offset + limit + 1
+    params["min_row"] = offset
 
-    return jsonify({"count": len(data), "targets": data})
+    with oracle_cursor() as cursor:
+        cursor.execute(query, params)
+        fetched = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        fetched, has_more = apply_has_more(fetched, limit)
+        data = [_serialize_target(row) for row in fetched]
+
+    return jsonify(
+        {
+            "count": len(data),
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "targets": data,
+        }
+    )
 
 
 @targets_bp.post("/sales")
+@require_admin
 def create_sales_target():
     payload = request.get_json(silent=True) or {}
     employee_code = str(payload.get("employeeCode", "")).strip()
     route_no = str(payload.get("routeNo", "")).strip()
     period = _normalize_period(payload.get("period", ""))
     target_raw = payload.get("targetAmount")
-    achieved_raw = payload.get("achievedAmount", 0)
     due_date = _parse_iso_date(payload.get("dueDate", ""))
 
     if not employee_code:
@@ -388,10 +429,8 @@ def create_sales_target():
     except (TypeError, ValueError):
         return jsonify({"error": "Target amount must be a number"}), 400
 
-    try:
-        achieved_amount = float(achieved_raw or 0)
-    except (TypeError, ValueError):
-        return jsonify({"error": "Achieved amount must be a number"}), 400
+    # ACHIEVED is server-computed from orders — ignore client values.
+    achieved_amount = 0.0
 
     table_name = _table_name()
     due_iso = due_date.date().isoformat()
@@ -451,12 +490,17 @@ def create_sales_target():
 
 
 @targets_bp.post("/sales/recalculate")
+@require_admin
 def recalculate_sales_target_achieved():
     """Rebuild ACHIEVED from order TOTALAMOUNT (optional employeeCode filter)."""
     payload = request.get_json(silent=True) or {}
-    employee_code = str(
-        payload.get("employeeCode") or request.args.get("employeeCode") or ""
-    ).strip()
+    employee_code, scope_err = resolve_employee_scope(
+        str(
+            payload.get("employeeCode") or request.args.get("employeeCode") or ""
+        ).strip()
+    )
+    if scope_err is not None:
+        return scope_err
 
     with oracle_cursor() as cursor:
         updated = refresh_sales_target_achieved(
@@ -474,6 +518,7 @@ def recalculate_sales_target_achieved():
 
 
 @targets_bp.delete("/sales")
+@require_admin
 def delete_sales_target():
     payload = request.get_json(silent=True) or {}
     employee_code = str(payload.get("employeeCode", "")).strip()
@@ -496,8 +541,8 @@ def delete_sales_target():
         cursor.execute(
             f"""
             DELETE FROM {table_name}
-            WHERE TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode
-              AND TRIM(TO_CHAR(ROUTE)) = :route
+            WHERE TRIM(EMPLOYEECODE) = :employeecode
+              AND TRIM(ROUTE) = :route
               AND PERIOD = :period
               AND TRUNC(DUEDATE) = TRUNC(:duedate)
             """,
@@ -518,33 +563,53 @@ def delete_sales_target():
 
 
 @targets_bp.get("/products")
+@limiter.limit("90 per minute")
 def list_product_targets():
+    """List product targets (paginated)."""
     table_name = _product_table_name()
     columns_sql = ", ".join(PRODUCT_TARGET_COLUMNS)
-    employee_code = request.args.get("employeeCode", "").strip()
-    conditions, params = _build_target_filters(employee_code, period=None)
+    employee_code, scope_err = _scoped_employee_arg()
+    if scope_err is not None:
+        return scope_err
+    limit, offset = parse_limit_offset(
+        default_limit=_DEFAULT_LIMIT,
+        max_limit=_MAX_LIMIT,
+    )
+    conditions, params = _build_target_filters(employee_code or "", period=None)
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
+    inner_sql = f"""
+        SELECT {columns_sql}
+        FROM {table_name}
+        {where_sql}
+        ORDER BY EMPLOYEECODE, ROUTE, TYPE, PRODUCTS
+    """
+    query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
+    params["max_row"] = offset + limit + 1
+    params["min_row"] = offset
+
     with oracle_cursor() as cursor:
-        cursor.execute(
-            f"""
-            SELECT {columns_sql}
-            FROM {table_name}
-            {where_sql}
-            ORDER BY EMPLOYEECODE, ROUTE, TYPE, PRODUCTS
-            """,
-            params,
-        )
-        rows = cursor.fetchall()
-        data = [_serialize_product_target(row_to_dict(cursor, row)) for row in rows]
+        cursor.execute(query, params)
+        fetched = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        fetched, has_more = apply_has_more(fetched, limit)
+        data = [_serialize_product_target(row) for row in fetched]
 
     itemmaster_table = current_app.config["ORACLE_ITEMMASTER_TABLE"]
     _enrich_product_targets(data, itemmaster_table)
 
-    return jsonify({"count": len(data), "targets": data})
+    return jsonify(
+        {
+            "count": len(data),
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "targets": data,
+        }
+    )
 
 
 @targets_bp.post("/products")
+@require_admin
 def create_product_target():
     payload = request.get_json(silent=True) or {}
     employee_code = str(payload.get("employeeCode", "")).strip()
@@ -576,12 +641,8 @@ def create_product_target():
         return jsonify({"error": "Target value must be a number"}), 400
 
     table_name = _product_table_name()
-
-    achieved_raw = payload.get("achievedValue", 0)
-    try:
-        achieved_value = float(achieved_raw or 0)
-    except (TypeError, ValueError):
-        return jsonify({"error": "Achieved value must be a number"}), 400
+    # ACHIEVED is not client-writable.
+    achieved_value = 0.0
 
     with oracle_cursor() as cursor:
         cursor.execute(
@@ -629,6 +690,7 @@ def create_product_target():
 
 
 @targets_bp.delete("/products")
+@require_admin
 def delete_product_target():
     payload = request.get_json(silent=True) or {}
     employee_code = str(payload.get("employeeCode", "")).strip()
@@ -655,10 +717,10 @@ def delete_product_target():
         cursor.execute(
             f"""
             DELETE FROM {table_name}
-            WHERE TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode
-              AND TRIM(TO_CHAR(ROUTE)) = :route
-              AND LOWER(TRIM(TO_CHAR(TYPE))) = :type
-              AND TRIM(TO_CHAR(PRODUCTS)) = :products
+            WHERE TRIM(EMPLOYEECODE) = :employeecode
+              AND TRIM(ROUTE) = :route
+              AND LOWER(TRIM(TYPE)) = :type
+              AND TRIM(PRODUCTS) = :products
             """,
             {
                 "employeecode": employee_code,
@@ -677,44 +739,64 @@ def delete_product_target():
 
 
 @targets_bp.get("/customers")
+@limiter.limit("90 per minute")
 def list_customer_targets():
+    """List customer targets (paginated). DB ACHIEVED refresh is opt-in."""
     table_name = _customer_table_name()
     columns_sql = ", ".join(CUSTOMER_TARGET_COLUMNS)
-    employee_code = request.args.get("employeeCode", "").strip()
+    employee_code, scope_err = _scoped_employee_arg()
+    if scope_err is not None:
+        return scope_err
     period = _normalize_period(request.args.get("period", ""))
-    conditions, params = _build_target_filters(employee_code, period)
+    limit, offset = parse_limit_offset(
+        default_limit=_DEFAULT_LIMIT,
+        max_limit=_MAX_LIMIT,
+    )
+    conditions, params = _build_target_filters(employee_code or "", period)
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    with oracle_cursor() as cursor:
-        new_customer_count = refresh_new_acquisition_achieved(
-            cursor,
-            customer_targets_table=table_name,
-            contactinfo_table=_contactinfo_table(),
-            employee_code=employee_code or None,
-        )
-        get_connection().commit()
+    inner_sql = f"""
+        SELECT {columns_sql}
+        FROM {table_name}
+        {where_sql}
+        ORDER BY EMPLOYEECODE, ROUTE, TARGETTYPE, PERIOD
+    """
+    query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
+    params["max_row"] = offset + limit + 1
+    params["min_row"] = offset
 
-        cursor.execute(
-            f"""
-            SELECT {columns_sql}
-            FROM {table_name}
-            {where_sql}
-            ORDER BY EMPLOYEECODE, ROUTE, TARGETTYPE, PERIOD
-            """,
-            params,
-        )
-        rows = cursor.fetchall()
+    with oracle_cursor() as cursor:
+        contactinfo_table = _contactinfo_table()
+        if _wants_refresh_achieved():
+            new_customer_count = refresh_new_acquisition_achieved(
+                cursor,
+                customer_targets_table=table_name,
+                contactinfo_table=contactinfo_table,
+                employee_code=employee_code or None,
+            )
+            get_connection().commit()
+        else:
+            new_customer_count = count_new_customers_flag_n(
+                cursor, contactinfo_table
+            )
+
+        cursor.execute(query, params)
+        fetched = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        fetched, has_more = apply_has_more(fetched, limit)
         data = [
             _serialize_customer_target(
-                row_to_dict(cursor, row),
+                row,
                 new_customer_count=new_customer_count,
             )
-            for row in rows
+            for row in fetched
         ]
 
     return jsonify(
         {
             "count": len(data),
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
             "newCustomersFlagN": new_customer_count,
             "targets": data,
         }
@@ -722,6 +804,7 @@ def list_customer_targets():
 
 
 @targets_bp.post("/customers")
+@require_admin
 def create_customer_target():
     payload = request.get_json(silent=True) or {}
     employee_code = str(payload.get("employeeCode", "")).strip()
@@ -754,11 +837,8 @@ def create_customer_target():
     except (TypeError, ValueError):
         return jsonify({"error": "Target amount must be a number"}), 400
 
-    achieved_raw = payload.get("achievedCount", 0)
-    try:
-        achieved_count = float(achieved_raw or 0)
-    except (TypeError, ValueError):
-        return jsonify({"error": "Achieved count must be a number"}), 400
+    # ACHIEVED is server-computed — ignore client values.
+    achieved_count = 0.0
 
     table_name = _customer_table_name()
 
@@ -804,6 +884,7 @@ def create_customer_target():
 
 
 @targets_bp.delete("/customers")
+@require_admin
 def delete_customer_target():
     payload = request.get_json(silent=True) or {}
     employee_code = str(payload.get("employeeCode", "")).strip()
@@ -826,9 +907,9 @@ def delete_customer_target():
         cursor.execute(
             f"""
             DELETE FROM {table_name}
-            WHERE TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode
-              AND TRIM(TO_CHAR(ROUTE)) = :route
-              AND LOWER(TRIM(TO_CHAR(TARGETTYPE))) = :targettype
+            WHERE TRIM(EMPLOYEECODE) = :employeecode
+              AND TRIM(ROUTE) = :route
+              AND LOWER(TRIM(TARGETTYPE)) = :targettype
               AND PERIOD = :period
             """,
             {

@@ -14,18 +14,18 @@ import { Table } from '../components/ui/Table'
 import { ExecutiveDetailReport } from '../components/reports/ExecutiveDetailReport'
 import { formatCurrency, formatPercent } from '../context/AppContext'
 import {
-  fetchSalesTargets,
-  fetchCustomerTargets,
+  fetchAllSalesTargets,
+  fetchAllCustomerTargets,
   type DbSalesTarget,
   type DbCustomerTarget,
 } from '../api/targets'
 import {
-  fetchUsers,
+  fetchAllUsers,
   normalizeRouteNo,
   parseRouteColumn,
   type DbLoginUser,
 } from '../api/users'
-import { fetchRoutes, type DbRoute } from '../api/routes'
+import { fetchAllRoutes, type DbRoute } from '../api/routes'
 import {
   fetchCustomerStatsBatch,
   type CustomerRouteStats,
@@ -86,10 +86,10 @@ export function ReportsPage() {
     setError(null)
     try {
       const [usersRes, routesRes, salesRes, customerRes] = await Promise.all([
-        fetchUsers({ activeOnly: true }),
-        fetchRoutes({ limit: 500 }),
-        fetchSalesTargets(),
-        fetchCustomerTargets(),
+        fetchAllUsers({ activeOnly: true }),
+        fetchAllRoutes(),
+        fetchAllSalesTargets({ period: 'monthly' }),
+        fetchAllCustomerTargets(),
       ])
 
       setDbExecutives(usersRes.users)
@@ -146,16 +146,11 @@ export function ReportsPage() {
     loadReports()
   }, [loadReports])
 
-  const monthlySales = useMemo(
-    () => salesTargets.filter((t) => t.period === 'monthly'),
-    [salesTargets]
-  )
-
   const execReport = useMemo(() => {
     return dbExecutives.map((exec) => {
       const code = exec.employeecode.trim().toUpperCase()
       const routes = parseRouteColumn(exec.route)
-      const monthly = monthlySales.filter(
+      const monthly = salesTargets.filter(
         (t) => t.employeeCode.trim().toUpperCase() === code
       )
       const recovered = customerTargets.find(
@@ -183,7 +178,7 @@ export function ReportsPage() {
           : 0,
       }
     })
-  }, [dbExecutives, monthlySales, customerTargets, routeStats])
+  }, [dbExecutives, salesTargets, customerTargets, routeStats])
 
   const routeReport = useMemo(() => {
     return assignedRouteNos.map((routeNo) => {

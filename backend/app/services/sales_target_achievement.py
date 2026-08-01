@@ -73,38 +73,74 @@ def _route_matches(target_route, order_route: str) -> bool:
     return order_normalized in parse_route_column(target_route)
 
 
-def _sum_orders_for_target(
+def _fetch_orders_for_employees(
     cursor,
     order_hdr_table: str,
     *,
-    employee_code: str,
+    employee_codes: set[str],
+    start: datetime,
+    end: datetime,
+) -> dict[str, list[tuple[str, datetime | None, float]]]:
+    """
+    One round-trip: orders for all employees in [start, end].
+
+    Returns {employee_code: [(route, order_date, amount), ...]}.
+    """
+    if not employee_codes:
+        return {}
+
+    # Bind a small IN-list (typical: 1 employee after order save).
+    binds: dict = {"start_date": start, "end_date": end}
+    placeholders: list[str] = []
+    for index, code in enumerate(sorted(employee_codes)):
+        key = f"emp_{index}"
+        binds[key] = code
+        placeholders.append(f":{key}")
+
+    cursor.execute(
+        f"""
+        SELECT
+            TRIM(EMPLOYEECODE) AS EMPLOYEECODE,
+            TRIM(ROUTE) AS ROUTE,
+            TRUNC(ORDERDATE) AS ORDERDATE,
+            TOTALAMOUNT
+        FROM {order_hdr_table}
+        WHERE TRIM(EMPLOYEECODE) IN ({", ".join(placeholders)})
+          AND TRUNC(ORDERDATE) BETWEEN TRUNC(:start_date) AND TRUNC(:end_date)
+        """,
+        binds,
+    )
+
+    by_employee: dict[str, list[tuple[str, datetime | None, float]]] = {
+        code: [] for code in employee_codes
+    }
+    for emp, route, order_date, amount in cursor.fetchall():
+        emp_key = str(emp or "").strip()
+        if emp_key not in by_employee:
+            continue
+        try:
+            amt = float(amount or 0)
+        except (TypeError, ValueError):
+            continue
+        order_dt = _to_date(order_date)
+        by_employee[emp_key].append((str(route or "").strip(), order_dt, amt))
+    return by_employee
+
+
+def _sum_from_orders(
+    orders: list[tuple[str, datetime | None, float]],
+    *,
     target_route,
     start: datetime,
     end: datetime,
 ) -> float:
-    cursor.execute(
-        f"""
-        SELECT
-            TRIM(TO_CHAR(ROUTE)) AS ROUTE,
-            TOTALAMOUNT
-        FROM {order_hdr_table}
-        WHERE TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode
-          AND TRUNC(ORDERDATE) BETWEEN TRUNC(:start_date) AND TRUNC(:end_date)
-        """,
-        {
-            "employeecode": employee_code,
-            "start_date": start,
-            "end_date": end,
-        },
-    )
     total = 0.0
-    for route, amount in cursor.fetchall():
+    for route, order_date, amount in orders:
+        if order_date is None or order_date < start or order_date > end:
+            continue
         if not _route_matches(target_route, route):
             continue
-        try:
-            total += float(amount or 0)
-        except (TypeError, ValueError):
-            continue
+        total += amount
     return round(total, 2)
 
 
@@ -118,12 +154,13 @@ def refresh_sales_target_achieved(
     """
     Set ACHIEVED = SUM(matching order TOTALAMOUNT) for sales targets.
 
-    Call this after an order is saved so the Achieved column reflects order totals.
+    Batched: 1 target SELECT + 1 order SELECT + 1 executemany UPDATE
+    (avoids per-target N+1 round-trips after order save).
     """
     params: dict = {}
     where_sql = ""
     if employee_code:
-        where_sql = "WHERE TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode"
+        where_sql = "WHERE TRIM(EMPLOYEECODE) = :employeecode"
         params["employeecode"] = str(employee_code).strip()
 
     cursor.execute(
@@ -135,42 +172,58 @@ def refresh_sales_target_achieved(
         params,
     )
     rows = cursor.fetchall()
-    updated: list[dict] = []
+    if not rows:
+        return []
+
+    prepared: list[tuple] = []
+    employee_codes: set[str] = set()
+    min_start: datetime | None = None
+    max_end: datetime | None = None
 
     for employeecode, period, target, _achieved, route, duedate in rows:
         emp = str(employeecode or "").strip()
         window = period_window(period, duedate)
         if not emp or window is None:
             continue
-
         start, end = window
-        achieved = _sum_orders_for_target(
-            cursor,
-            order_hdr_table,
-            employee_code=emp,
+        employee_codes.add(emp)
+        if min_start is None or start < min_start:
+            min_start = start
+        if max_end is None or end > max_end:
+            max_end = end
+        prepared.append((emp, period, target, route, duedate, start, end))
+
+    if not prepared or min_start is None or max_end is None:
+        return []
+
+    orders_by_emp = _fetch_orders_for_employees(
+        cursor,
+        order_hdr_table,
+        employee_codes=employee_codes,
+        start=min_start,
+        end=max_end,
+    )
+
+    updated: list[dict] = []
+    update_binds: list[dict] = []
+
+    for emp, period, target, route, duedate, start, end in prepared:
+        achieved = _sum_from_orders(
+            orders_by_emp.get(emp, []),
             target_route=route,
             start=start,
             end=end,
         )
-
-        cursor.execute(
-            f"""
-            UPDATE {sale_targets_table}
-            SET ACHIEVED = :achieved
-            WHERE TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode
-              AND PERIOD = :period
-              AND TRIM(TO_CHAR(ROUTE)) = :route
-              AND TRUNC(DUEDATE) = TRUNC(:duedate)
-            """,
+        due_value = duedate if isinstance(duedate, datetime) else _to_date(duedate)
+        update_binds.append(
             {
                 "achieved": achieved,
                 "employeecode": emp,
                 "period": period,
                 "route": str(route or "").strip(),
-                "duedate": duedate if isinstance(duedate, datetime) else _to_date(duedate),
-            },
+                "duedate": due_value,
+            }
         )
-
         target_amount = float(target or 0)
         updated.append(
             {
@@ -186,6 +239,19 @@ def refresh_sales_target_achieved(
                 "achievedAmount": achieved,
                 "remainingAmount": round(target_amount - achieved, 2),
             }
+        )
+
+    if update_binds:
+        cursor.executemany(
+            f"""
+            UPDATE {sale_targets_table}
+            SET ACHIEVED = :achieved
+            WHERE TRIM(EMPLOYEECODE) = :employeecode
+              AND PERIOD = :period
+              AND TRIM(ROUTE) = :route
+              AND TRUNC(DUEDATE) = TRUNC(:duedate)
+            """,
+            update_binds,
         )
 
     return updated

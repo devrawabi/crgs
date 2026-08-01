@@ -47,8 +47,6 @@ class AppSidebarPanel extends ConsumerWidget {
     final moreItems = [
       (AppIcons.profile, 'Profile', RouteNames.profile, location == RouteNames.profile),
       (AppIcons.reports, 'Reports', RouteNames.reports, location == RouteNames.reports),
-      (AppIcons.wallet, 'Outstanding', RouteNames.outstanding, location == RouteNames.outstanding),
-      (AppIcons.event, 'Follow-ups', RouteNames.followUp, location == RouteNames.followUp),
       (AppIcons.settings, 'Settings', RouteNames.settings, location == RouteNames.settings),
     ];
 
@@ -402,15 +400,5 @@ class _SidebarTile extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-/// Legacy drawer wrapper — prefer [AppSidebarPanel] via [MainShell].
-class AppSidebarDrawer extends ConsumerWidget {
-  const AppSidebarDrawer({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return const AppSidebarPanel(progress: 1);
   }
 }

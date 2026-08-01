@@ -3,8 +3,14 @@ from datetime import datetime
 from flask import Blueprint, current_app, jsonify, request
 
 from app.db import get_connection, oracle_cursor, row_to_dict
+from app.pagination import apply_has_more, parse_limit_offset, rownum_page_sql
+from app.routes.auth import limiter
+from app.security import enforce_owned_employee_code, resolve_employee_scope
 
 visits_bp = Blueprint("visits", __name__)
+
+_DEFAULT_LIMIT = 50
+_MAX_LIMIT = 200
 
 
 def _table_name():
@@ -85,50 +91,62 @@ def _serialize_visit(row: dict) -> dict:
 
 
 @visits_bp.get("")
+@limiter.limit("90 per minute")
 def list_visits():
-    """List visit rows from CRGS_VISITDETAILS, optionally filtered by employee."""
+    """List visit rows from CRGS_VISITDETAILS (paginated)."""
     table_name = _table_name()
-    employee_code = str(request.args.get("employeeCode", "")).strip()
+    employee_code, scope_err = resolve_employee_scope(
+        request.args.get("employeeCode", "").strip()
+    )
+    if scope_err is not None:
+        return scope_err
     customer_code = str(request.args.get("customerCode", "")).strip()
+    limit, offset = parse_limit_offset(
+        default_limit=_DEFAULT_LIMIT,
+        max_limit=_MAX_LIMIT,
+    )
 
     conditions: list[str] = []
     params: dict = {}
     if employee_code:
-        conditions.append("TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode")
+        conditions.append("TRIM(EMPLOYEECODE) = :employeecode")
         params["employeecode"] = employee_code
     if customer_code:
-        conditions.append("TRIM(TO_CHAR(CUSTOMERCODE)) = :customercode")
+        conditions.append("TRIM(CUSTOMERCODE) = :customercode")
         params["customercode"] = customer_code
 
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    columns_sql = (
+        "EMPLOYEECODE, CUSTOMERCODE, CUSTOMERNAME, ROUTE, VISITDATE, "
+        "VISITSTART, VISITEND, TOTALDURATION, LOCATION, REASON, REMARKS, FOLLOWUPDATE"
+    )
+    inner_sql = f"""
+        SELECT {columns_sql}
+        FROM {table_name}
+        {where_sql}
+        ORDER BY VISITDATE DESC NULLS LAST,
+                 VISITSTART DESC NULLS LAST,
+                 CUSTOMERNAME
+    """
+    query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
+    params["max_row"] = offset + limit + 1
+    params["min_row"] = offset
 
     with oracle_cursor() as cursor:
-        cursor.execute(
-            f"""
-            SELECT
-                EMPLOYEECODE,
-                CUSTOMERCODE,
-                CUSTOMERNAME,
-                ROUTE,
-                VISITDATE,
-                VISITSTART,
-                VISITEND,
-                TOTALDURATION,
-                LOCATION,
-                REASON,
-                REMARKS,
-                FOLLOWUPDATE
-            FROM {table_name}
-            {where_sql}
-            ORDER BY VISITDATE DESC NULLS LAST,
-                     VISITSTART DESC NULLS LAST,
-                     CUSTOMERNAME
-            """,
-            params,
-        )
-        rows = [_serialize_visit(row_to_dict(cursor, row)) for row in cursor.fetchall()]
+        cursor.execute(query, params)
+        fetched = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        fetched, has_more = apply_has_more(fetched, limit)
+        rows = [_serialize_visit(row) for row in fetched]
 
-    return jsonify({"count": len(rows), "visits": rows})
+    return jsonify(
+        {
+            "count": len(rows),
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "visits": rows,
+        }
+    )
 
 
 @visits_bp.post("/start")
@@ -136,7 +154,11 @@ def start_visit():
     """Insert a row into CRGS_VISITDETAILS when a visit begins."""
     payload = request.get_json(silent=True) or {}
 
-    employee_code = str(payload.get("employeeCode", "")).strip()
+    employee_code, owned_err = enforce_owned_employee_code(
+        payload.get("employeeCode")
+    )
+    if owned_err is not None:
+        return owned_err
     customer_code = str(payload.get("customerCode", "")).strip()
     customer_name = str(payload.get("customerName", "")).strip()
     route = str(payload.get("route", "")).strip()
@@ -245,7 +267,11 @@ def end_visit():
     """Update VISITEND and TOTALDURATION (and form fields) when a visit ends."""
     payload = request.get_json(silent=True) or {}
 
-    employee_code = str(payload.get("employeeCode", "")).strip()
+    employee_code, owned_err = enforce_owned_employee_code(
+        payload.get("employeeCode")
+    )
+    if owned_err is not None:
+        return owned_err
     customer_code = str(payload.get("customerCode", "")).strip()
     visit_start = _parse_iso_datetime(payload.get("visitStart", ""))
     visit_end = _parse_iso_datetime(payload.get("visitEnd", ""))
@@ -297,8 +323,8 @@ def end_visit():
                 REASON = NVL(:reason, REASON),
                 REMARKS = NVL(:remarks, REMARKS),
                 FOLLOWUPDATE = NVL(:followup, FOLLOWUPDATE)
-            WHERE TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode
-              AND TRIM(TO_CHAR(CUSTOMERCODE)) = :customercode
+            WHERE TRIM(EMPLOYEECODE) = :employeecode
+              AND TRIM(CUSTOMERCODE) = :customercode
               AND VISITEND IS NULL
               AND TRIM(VISITSTART) = :visitstart
             """,
@@ -332,8 +358,8 @@ def end_visit():
                     SELECT rid FROM (
                         SELECT ROWID AS rid
                         FROM {table_name}
-                        WHERE TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode
-                          AND TRIM(TO_CHAR(CUSTOMERCODE)) = :customercode
+                        WHERE TRIM(EMPLOYEECODE) = :employeecode
+                          AND TRIM(CUSTOMERCODE) = :customercode
                           AND VISITEND IS NULL
                         ORDER BY VISITDATE DESC NULLS LAST, VISITSTART DESC NULLS LAST
                         FETCH FIRST 1 ROW ONLY

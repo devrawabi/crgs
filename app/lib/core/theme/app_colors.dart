@@ -28,6 +28,13 @@ abstract final class AppColors {
   static const Color successGreenContainer = Color(0xFFDCFCE7);
   static const Color onSuccessGreenContainer = Color(0xFF14532D);
 
+  // Own products (indigo — distinct from brand teal / promo green / replace orange)
+  static const Color ownProduct = Color(0xFF4F46E5);
+  static const Color ownProductLight = Color(0xFF6366F1);
+  static const Color ownProductDark = Color(0xFF3730A3);
+  static const Color ownProductContainer = Color(0xFFE0E7FF);
+  static const Color onOwnProductContainer = Color(0xFF312E81);
+
   // Priority / Status
   static const Color missingRed = Color(0xFFDC2626);
   static const Color outstandingOrange = Color(0xFFEA580C);

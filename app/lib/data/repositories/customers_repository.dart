@@ -321,32 +321,54 @@ class CustomersRepository {
     );
   }
 
-  /// Lists prospects from Oracle `CRGS_CONTACTINFO`.
+  /// Lists prospects from Oracle `CRGS_CONTACTINFO` (walks pages).
   Future<List<ContactInfoModel>> fetchContactInfo({
     String? status,
     String? search,
   }) async {
-    final response = await _client.get<Map<String, dynamic>>(
-      ApiEndpoints.customerContactInfo,
-      queryParameters: {
-        if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
-        if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
-      },
-    );
+    const pageSize = 50;
+    final all = <ContactInfoModel>[];
+    var offset = 0;
 
-    final data = response.data;
-    if (data == null) {
-      throw ApiException(message: 'Empty response from server');
+    for (var i = 0; i < 100; i++) {
+      final response = await _client.get<Map<String, dynamic>>(
+        ApiEndpoints.customerContactInfo,
+        queryParameters: {
+          'limit': pageSize,
+          'offset': offset,
+          if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
+          if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+        },
+      );
+
+      final data = response.data;
+      if (data == null) {
+        throw ApiException(message: 'Empty response from server');
+      }
+
+      final itemsJson = data['items'];
+      final page = itemsJson is List
+          ? itemsJson
+              .whereType<Map>()
+              .map(
+                (item) =>
+                    ContactInfoModel.fromJson(Map<String, dynamic>.from(item)),
+              )
+              .where(
+                (item) =>
+                    item.customerName.isNotEmpty || item.shopName.isNotEmpty,
+              )
+              .toList()
+          : const <ContactInfoModel>[];
+
+      all.addAll(page);
+      final hasMore = data['has_more'] == true;
+      final limitUsed = (data['limit'] as num?)?.toInt() ?? pageSize;
+      if (!hasMore || page.isEmpty) break;
+      offset += limitUsed;
     }
 
-    final itemsJson = data['items'];
-    if (itemsJson is! List) return const [];
-
-    return itemsJson
-        .whereType<Map>()
-        .map((item) => ContactInfoModel.fromJson(Map<String, dynamic>.from(item)))
-        .where((item) => item.customerName.isNotEmpty || item.shopName.isNotEmpty)
-        .toList();
+    return all;
   }
 
   /// Inserts into Oracle `CRGS_CONTACTINFO`.

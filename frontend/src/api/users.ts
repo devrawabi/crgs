@@ -1,4 +1,5 @@
 import { apiGet, apiPatch, apiPost } from './client'
+import { fetchAllPages } from './paginate'
 
 export interface DbLoginUser {
   username: string
@@ -52,6 +53,9 @@ export function toggleRouteNo(
 
 export interface UsersResponse {
   count: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   users: DbLoginUser[]
 }
 
@@ -72,12 +76,29 @@ export interface CreateUserResponse {
 
 export interface FetchUsersParams {
   activeOnly?: boolean
+  limit?: number
+  offset?: number
 }
 
 export function fetchUsers(params: FetchUsersParams = {}) {
   return apiGet<UsersResponse>('/api/users', {
     activeOnly: params.activeOnly ? 'true' : undefined,
+    limit: params.limit ?? 200,
+    offset: params.offset ?? 0,
   })
+}
+
+/** Walk pages so admin screens still see every user. */
+export async function fetchAllUsers(
+  params: Omit<FetchUsersParams, 'limit' | 'offset'> = {}
+) {
+  const users = await fetchAllPages<DbLoginUser>({
+    pageSize: 500,
+    itemsKey: 'users',
+    fetchPage: ({ limit, offset }) =>
+      fetchUsers({ ...params, limit, offset }) as Promise<Record<string, unknown>>,
+  })
+  return { count: users.length, users }
 }
 
 export function createUser(payload: CreateUserPayload) {

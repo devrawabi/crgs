@@ -14,9 +14,9 @@ import {
   PRODUCT_TARGET_LABELS,
   CUSTOMER_TARGET_LABELS,
 } from '../data/mockData'
-import { fetchRoutes, type DbRoute } from '../api/routes'
+import { fetchAllRoutes, type DbRoute } from '../api/routes'
 import {
-  fetchUsers,
+  fetchAllUsers,
   formatRouteColumn,
   isRouteNoSelected,
   parseRouteColumn,
@@ -29,9 +29,9 @@ import {
   deleteSalesTarget,
   deleteProductTarget,
   deleteCustomerTarget,
-  fetchSalesTargets,
-  fetchProductTargets,
-  fetchCustomerTargets,
+  fetchAllSalesTargets,
+  fetchAllProductTargets,
+  fetchAllCustomerTargets,
   recalculateSalesTargets,
   type DbSalesTarget,
   type DbProductTarget,
@@ -136,7 +136,7 @@ export function TargetsPage() {
   const loadExecutives = useCallback(async () => {
     setExecutivesLoading(true)
     try {
-      const data = await fetchUsers({ activeOnly: true })
+      const data = await fetchAllUsers({ activeOnly: true })
       setDbExecutives(data.users)
       syncExecutivesFromDb(data.users)
     } catch {
@@ -149,7 +149,7 @@ export function TargetsPage() {
   const loadRoutes = useCallback(async () => {
     setRoutesLoading(true)
     try {
-      const data = await fetchRoutes()
+      const data = await fetchAllRoutes()
       setDbRoutes(data.routes)
     } catch {
       setDbRoutes([])
@@ -162,7 +162,7 @@ export function TargetsPage() {
     setSalesTargetsLoading(true)
     setSalesTargetsError(null)
     try {
-      const data = await fetchSalesTargets()
+      const data = await fetchAllSalesTargets()
       setDbSalesTargets(data.targets)
     } catch (err) {
       setDbSalesTargets([])
@@ -191,7 +191,7 @@ export function TargetsPage() {
     setProductTargetsLoading(true)
     setProductTargetsError(null)
     try {
-      const data = await fetchProductTargets()
+      const data = await fetchAllProductTargets()
       setDbProductTargets(data.targets)
     } catch (err) {
       setDbProductTargets([])
@@ -205,7 +205,7 @@ export function TargetsPage() {
     setCustomerTargetsLoading(true)
     setCustomerTargetsError(null)
     try {
-      const data = await fetchCustomerTargets()
+      const data = await fetchAllCustomerTargets({ refreshAchieved: true })
       setDbCustomerTargets(data.targets)
     } catch (err) {
       setDbCustomerTargets([])

@@ -10,12 +10,6 @@ final targetsRepositoryProvider = Provider<TargetsRepository>((ref) {
   return TargetsRepository(ref.watch(apiClientProvider));
 });
 
-bool _matchesAssignedRoute(String routeNo, Set<String> assignedRoutes) {
-  if (assignedRoutes.isEmpty) return true;
-  final normalized = normalizeRouteNo(routeNo);
-  if (normalized.isEmpty) return true;
-  return assignedRoutes.contains(normalized);
-}
 
 List<PeriodTargetTotals> _aggregateSalesByPeriod(List<SalesTargetModel> targets) {
   final totals = {
@@ -60,14 +54,14 @@ final executiveTargetsProvider =
   ]);
 
   final salesTargets = (results[0] as List<SalesTargetModel>)
-      .where((target) => _matchesAssignedRoute(target.routeNo, assignedRoutes))
+      .where((target) => matchesAssignedRoutes(target.routeNo, assignedRoutes))
       .toList();
   final productTargets = (results[1] as List<ProductTargetModel>)
-      .where((target) => _matchesAssignedRoute(target.routeNo, assignedRoutes))
+      .where((target) => matchesAssignedRoutes(target.routeNo, assignedRoutes))
       .toList();
   final customerResult = results[2] as CustomerTargetsResult;
   final customerTargets = customerResult.targets
-      .where((target) => _matchesAssignedRoute(target.routeNo, assignedRoutes))
+      .where((target) => matchesAssignedRoutes(target.routeNo, assignedRoutes))
       .toList();
 
   return ExecutiveTargetsData(

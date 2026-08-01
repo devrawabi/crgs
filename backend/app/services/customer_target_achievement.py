@@ -35,9 +35,9 @@ def refresh_new_acquisition_achieved(
     achieved = count_new_customers_flag_n(cursor, contactinfo_table)
 
     params: dict = {"achieved": achieved, "targettype": NEW_ACQUISITION_TYPE}
-    where_sql = "WHERE LOWER(TRIM(TO_CHAR(TARGETTYPE))) = :targettype"
+    where_sql = "WHERE LOWER(TRIM(TARGETTYPE)) = :targettype"
     if employee_code:
-        where_sql += " AND TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode"
+        where_sql += " AND TRIM(EMPLOYEECODE) = :employeecode"
         params["employeecode"] = str(employee_code).strip()
 
     cursor.execute(

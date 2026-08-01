@@ -3,9 +3,15 @@ from datetime import datetime
 from flask import Blueprint, current_app, jsonify, request
 
 from app.db import get_connection, oracle_cursor, row_to_dict
+from app.pagination import apply_has_more, parse_limit_offset, rownum_page_sql
+from app.routes.auth import limiter
+from app.security import enforce_owned_employee_code, resolve_employee_scope
 from app.services.sales_target_achievement import refresh_sales_target_achieved
 
 orders_bp = Blueprint("orders", __name__)
+
+_DEFAULT_LIMIT = 50
+_MAX_LIMIT = 200
 
 
 def _hdr_table():
@@ -146,23 +152,133 @@ def _group_orders(rows: list[dict]) -> list[dict]:
     return result
 
 
+def _header_orders(header_rows: list[dict]) -> list[dict]:
+    """Serialize header-only order rows (empty items[])."""
+    orders = []
+    for row in header_rows:
+        order_no = str(row.get("orderno") or "").strip()
+        if not order_no:
+            continue
+        orders.append(
+            {
+                "orderNo": order_no,
+                "orderDate": _date_only(row.get("orderdate")),
+                "employeeCode": str(row.get("employeecode") or "").strip(),
+                "customerCode": str(row.get("customercode") or "").strip(),
+                "customerName": str(row.get("customername") or "").strip(),
+                "route": str(row.get("route") or "").strip(),
+                "totalAmount": _to_float(row.get("totalamount")),
+                "itemCount": _to_int(row.get("itemcount")),
+                "expectedDate": _date_only(row.get("expecteddate")),
+                "items": [],
+            }
+        )
+    return orders
+
+
 @orders_bp.get("")
+@limiter.limit("90 per minute")
 def list_orders():
-    """Fetch expected orders from CRGS_ORDERHDR + CRGS_ORDERDTL."""
+    """
+    Fetch expected orders from CRGS_ORDERHDR (+ optional CRGS_ORDERDTL).
+
+    Pagination is applied to order headers (not detail rows).
+    Query params:
+      - employeeCode, limit (default 50, max 200), offset
+      - includeDetails: true|false (default true). false skips detail/ITEMNAME join.
+    """
     hdr_table = _hdr_table()
     dtl_table = _dtl_table()
     item_table = _item_table()
-    employee_code = request.args.get("employeeCode", "").strip()
+    employee_code, scope_err = resolve_employee_scope(
+        request.args.get("employeeCode", "").strip()
+    )
+    if scope_err is not None:
+        return scope_err
+    include_details = request.args.get("includeDetails", "true").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    limit, offset = parse_limit_offset(
+        default_limit=_DEFAULT_LIMIT,
+        max_limit=_MAX_LIMIT,
+    )
 
     conditions: list[str] = []
     params: dict = {}
     if employee_code:
-        conditions.append("TRIM(TO_CHAR(h.EMPLOYEECODE)) = :employeecode")
+        conditions.append("TRIM(EMPLOYEECODE) = :employeecode")
         params["employeecode"] = employee_code
 
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
+    # Page headers first (limit+1 for exact has_more), then load details.
+    headers_inner = f"""
+        SELECT
+            ORDERNO,
+            ORDERDATE,
+            EMPLOYEECODE,
+            CUSTOMERCODE,
+            CUSTOMERNAME,
+            ROUTE,
+            TOTALAMOUNT,
+            ITEMCOUNT,
+            EXPECTEDDATE
+        FROM {hdr_table}
+        {where_sql}
+        ORDER BY ORDERDATE DESC,
+                 TO_NUMBER(REGEXP_SUBSTR(TRIM(ORDERNO), '^[0-9]+')) DESC NULLS LAST
+    """
+    headers_sql = rownum_page_sql(
+        headers_inner,
+        columns_sql=(
+            "ORDERNO, ORDERDATE, EMPLOYEECODE, CUSTOMERCODE, CUSTOMERNAME, "
+            "ROUTE, TOTALAMOUNT, ITEMCOUNT, EXPECTEDDATE"
+        ),
+    )
+    params["max_row"] = offset + limit + 1
+    params["min_row"] = offset
+
     with oracle_cursor() as cursor:
+        cursor.execute(headers_sql, params)
+        header_rows = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        header_rows, has_more = apply_has_more(header_rows, limit)
+
+        if not header_rows:
+            return jsonify(
+                {
+                    "count": 0,
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": False,
+                    "includeDetails": include_details,
+                    "orders": [],
+                }
+            )
+
+        if not include_details:
+            orders = _header_orders(header_rows)
+            return jsonify(
+                {
+                    "count": len(orders),
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": has_more,
+                    "includeDetails": False,
+                    "orders": orders,
+                }
+            )
+
+        order_nos = [
+            str(row.get("orderno") or "").strip()
+            for row in header_rows
+            if str(row.get("orderno") or "").strip()
+        ]
+        # Bind IN-list safely (Oracle named binds).
+        in_binds = {f"ono_{i}": ono for i, ono in enumerate(order_nos)}
+        in_sql = ", ".join(f":{key}" for key in in_binds)
+
         cursor.execute(
             f"""
             SELECT
@@ -184,23 +300,69 @@ def list_orders():
                 i.ITEMNAME
             FROM {hdr_table} h
             LEFT JOIN {dtl_table} d
-                ON TRIM(TO_CHAR(h.ORDERNO)) = TRIM(TO_CHAR(d.ORDERNO))
+                ON h.ORDERNO = d.ORDERNO
             LEFT JOIN {item_table} i
-                ON TRIM(TO_CHAR(d.ITEMCODE)) = TRIM(TO_CHAR(i.ITEMCODE))
-            {where_sql}
+                ON (
+                    d.ITEMCODE = i.ITEMCODE
+                    OR TRIM(TO_CHAR(d.ITEMCODE)) = TRIM(TO_CHAR(i.ITEMCODE))
+                )
+            WHERE h.ORDERNO IN ({in_sql})
             ORDER BY h.ORDERDATE DESC,
-                     TO_NUMBER(REGEXP_SUBSTR(TRIM(TO_CHAR(h.ORDERNO)), '^[0-9]+')) DESC NULLS LAST,
+                     TO_NUMBER(REGEXP_SUBSTR(TRIM(h.ORDERNO), '^[0-9]+')) DESC NULLS LAST,
                      d.ITEMCODE
             """,
-            params,
+            in_binds,
         )
         rows = [row_to_dict(cursor, row) for row in cursor.fetchall()]
 
     orders = _group_orders(rows)
-    return jsonify({"count": len(orders), "orders": orders})
+    # Preserve header page order (IN-clause order is not guaranteed).
+    order_index = {ono: idx for idx, ono in enumerate(order_nos)}
+    orders.sort(key=lambda o: order_index.get(str(o.get("orderNo") or ""), 10**9))
+
+    return jsonify(
+        {
+            "count": len(orders),
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "includeDetails": True,
+            "orders": orders,
+        }
+    )
 
 
-def _normalize_items(raw_items, route: str) -> tuple[list[dict], str | None]:
+def _lookup_retail_prices(cursor, item_codes: list[str]) -> dict[str, float]:
+    """Server-authoritative unit prices from ITEMMASTER.RETAILPRICE."""
+    prices: dict[str, float] = {}
+    if not item_codes:
+        return prices
+    item_table = _item_table()
+    unique = list(dict.fromkeys(item_codes))
+    for start in range(0, len(unique), 40):
+        chunk = unique[start : start + 40]
+        binds = {f"c{i}": code for i, code in enumerate(chunk)}
+        in_sql = ", ".join(f":{key}" for key in binds)
+        cursor.execute(
+            f"""
+            SELECT TRIM(TO_CHAR(ITEMCODE)), NVL(RETAILPRICE, 0)
+            FROM {item_table}
+            WHERE TRIM(TO_CHAR(ITEMCODE)) IN ({in_sql})
+            """,
+            binds,
+        )
+        for row in cursor.fetchall():
+            code = str(row[0] or "").strip()
+            if code:
+                prices[code.upper()] = float(row[1] or 0)
+    return prices
+
+
+def _normalize_items(
+    raw_items,
+    route: str,
+    prices_by_code: dict[str, float],
+) -> tuple[list[dict], str | None]:
     if not isinstance(raw_items, list) or not raw_items:
         return [], "At least one order item is required"
 
@@ -219,29 +381,12 @@ def _normalize_items(raw_items, route: str) -> tuple[list[dict], str | None]:
         except (TypeError, ValueError):
             return [], f"Item {index + 1} quantity is invalid"
 
-        try:
-            price = float(raw.get("price", raw.get("unitPrice", 0)) or 0)
-        except (TypeError, ValueError):
-            return [], f"Item {index + 1} price is invalid"
-
-        if "amount" in raw and raw.get("amount") is not None:
-            try:
-                amount = float(raw.get("amount") or 0)
-            except (TypeError, ValueError):
-                return [], f"Item {index + 1} amount is invalid"
-        else:
-            amount = round(qty * price, 2)
-
         item_route = str(raw.get("route") or route).strip() or route
 
         if not item_code:
             return [], f"Item {index + 1} code is required"
         if qty <= 0:
             return [], f"Item {index + 1} quantity must be greater than zero"
-        if price < 0:
-            return [], f"Item {index + 1} price cannot be negative"
-        if amount < 0:
-            return [], f"Item {index + 1} amount cannot be negative"
         if len(item_code) > 30:
             return [], f"Item {index + 1} code must be 30 characters or fewer"
         if len(uom) > 10:
@@ -249,13 +394,20 @@ def _normalize_items(raw_items, route: str) -> tuple[list[dict], str | None]:
         if len(item_route) > 20:
             return [], f"Item {index + 1} route must be 20 characters or fewer"
 
+        price = prices_by_code.get(item_code.upper())
+        if price is None:
+            return [], f"Item {index + 1} ({item_code}) was not found in item master"
+        if price < 0:
+            return [], f"Item {index + 1} price cannot be negative"
+
+        amount = round(qty * price, 2)
         items.append(
             {
                 "itemcode": item_code,
                 "qty": round(qty, 3),
                 "uom": uom,
                 "price": round(price, 2),
-                "amount": round(amount, 2),
+                "amount": amount,
                 "route": item_route,
             }
         )
@@ -268,27 +420,16 @@ def create_order():
     """Insert CRGS_ORDERHDR + CRGS_ORDERDTL rows when Save Expected Order is clicked."""
     payload = request.get_json(silent=True) or {}
 
-    employee_code = str(payload.get("employeeCode", "")).strip()
+    employee_code, owned_err = enforce_owned_employee_code(
+        payload.get("employeeCode")
+    )
+    if owned_err is not None:
+        return owned_err
     customer_code = str(payload.get("customerCode", "")).strip()
     customer_name = str(payload.get("customerName", "")).strip()
     route = str(payload.get("route", "")).strip()
     order_date = _parse_iso_datetime(payload.get("orderDate", ""))
     expected_date = _parse_iso_date(payload.get("expectedDate", ""))
-
-    items, items_error = _normalize_items(payload.get("items"), route)
-    if items_error:
-        return jsonify({"error": items_error}), 400
-
-    total_amount = round(sum(item["amount"] for item in items), 2)
-    item_count = len(items)
-
-    if "totalAmount" in payload and payload.get("totalAmount") is not None:
-        try:
-            client_total = float(payload.get("totalAmount") or 0)
-            if abs(client_total - total_amount) < 0.01:
-                total_amount = round(client_total, 2)
-        except (TypeError, ValueError):
-            return jsonify({"error": "Total amount must be a number"}), 400
 
     if not employee_code:
         return jsonify({"error": "Employee code is required"}), 400
@@ -298,8 +439,6 @@ def create_order():
         return jsonify({"error": "Customer name is required"}), 400
     if not route:
         return jsonify({"error": "Route is required"}), 400
-    if total_amount < 0:
-        return jsonify({"error": "Total amount cannot be negative"}), 400
 
     # ORDERDATE = calendar date only; ORDERTIME = clock time when the order was saved.
     order_time = datetime.now().replace(microsecond=0)
@@ -318,8 +457,28 @@ def create_order():
 
     hdr_table = _hdr_table()
     dtl_table = _dtl_table()
+    raw_items = payload.get("items")
 
     with oracle_cursor() as cursor:
+        codes: list[str] = []
+        if isinstance(raw_items, list):
+            for raw in raw_items:
+                if isinstance(raw, dict):
+                    code = str(
+                        raw.get("itemCode") or raw.get("productId") or ""
+                    ).strip()
+                    if code:
+                        codes.append(code)
+        prices = _lookup_retail_prices(cursor, codes)
+        items, items_error = _normalize_items(raw_items, route, prices)
+        if items_error:
+            return jsonify({"error": items_error}), 400
+
+        total_amount = round(sum(item["amount"] for item in items), 2)
+        item_count = len(items)
+        if total_amount < 0:
+            return jsonify({"error": "Total amount cannot be negative"}), 400
+
         order_no = _next_order_no(cursor, hdr_table)
         cursor.execute(
             f"""

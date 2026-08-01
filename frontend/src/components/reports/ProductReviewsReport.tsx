@@ -6,12 +6,13 @@ import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
 import { inputClass } from '../ui/PageHeader'
 import {
-  fetchProductReviews,
+  fetchAllProductReviews,
   productReviewImageSrc,
   type DbProductReview,
 } from '../../api/productReviews'
-import { fetchUsers, type DbLoginUser } from '../../api/users'
+import { fetchAllUsers, type DbLoginUser } from '../../api/users'
 import { downloadProductReviewsExcel } from '../../utils/downloadProductReviewsExcel'
+import { AuthenticatedImage } from '../common/AuthenticatedImage'
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
@@ -41,9 +42,9 @@ export function ProductReviewsReport({ executives }: ProductReviewsReportProps) 
     try {
       const needsUsers = !executives
       const [reviewsRes, usersRes] = await Promise.all([
-        fetchProductReviews(),
+        fetchAllProductReviews(),
         needsUsers
-          ? fetchUsers({ activeOnly: false })
+          ? fetchAllUsers({ activeOnly: false })
           : Promise.resolve({ users: executives }),
       ])
       setItems(reviewsRes.items ?? [])
@@ -267,7 +268,7 @@ export function ProductReviewsReport({ executives }: ProductReviewsReportProps) 
             {productReviewImageSrc(selected.imageUrl) ? (
               <div className="space-y-2">
                 <p className="text-sm font-medium text-gray-500">Photo</p>
-                <img
+                <AuthenticatedImage
                   src={productReviewImageSrc(selected.imageUrl)!}
                   alt="Product review attachment"
                   className="max-h-72 w-full rounded-lg border border-gray-200 object-contain bg-gray-50"

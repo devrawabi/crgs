@@ -749,7 +749,7 @@ class _ProductDetailSheetState extends ConsumerState<ProductDetailSheet> {
                   _ProductCarouselSection(
                     title: 'Own Products',
                     icon: AppIcons.inventory,
-                    accent: AppColors.primaryBlue,
+                    accent: AppColors.ownProduct,
                     products: _ownProducts,
                     theme: theme,
                     selectedId: _selectedId,
@@ -760,7 +760,7 @@ class _ProductDetailSheetState extends ConsumerState<ProductDetailSheet> {
                     onViewMore: () => _openAllProducts(
                       title: 'Own Products',
                       icon: AppIcons.inventory,
-                      accent: AppColors.primaryBlue,
+                      accent: AppColors.ownProduct,
                       products: _ownProducts,
                     ),
                   ),
@@ -1084,7 +1084,7 @@ class _ProductHeader extends StatelessWidget {
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: AppColors.primaryBlue.withValues(alpha: 0.85),
+                        color: AppColors.ownProduct.withValues(alpha: 0.85),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(

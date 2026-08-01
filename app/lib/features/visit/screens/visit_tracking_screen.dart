@@ -322,6 +322,8 @@ class _VisitTrackingScreenState extends ConsumerState<VisitTrackingScreen> {
               ),
               const SizedBox(height: 20),
               VisitDetailsForm(
+                customerId: widget.customerId,
+                customerName: customer.name,
                 reasons: reasons,
                 selectedReason: _selectedReason,
                 onReasonChanged: (v) => setState(() => _selectedReason = v),

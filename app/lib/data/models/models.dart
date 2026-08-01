@@ -940,25 +940,6 @@ class TaskModel {
   }
 }
 
-class CustomerFollowUpProgress {
-  const CustomerFollowUpProgress({
-    required this.customerId,
-    required this.customerName,
-    required this.routeName,
-    required this.completedFollowUps,
-    required this.totalFollowUps,
-  });
-
-  final String customerId;
-  final String customerName;
-  final String routeName;
-  final int completedFollowUps;
-  final int totalFollowUps;
-
-  double get progressFraction =>
-      totalFollowUps > 0 ? completedFollowUps / totalFollowUps : 0;
-}
-
 class FollowUpModel {
   const FollowUpModel({
     required this.id,
@@ -1208,22 +1189,34 @@ class OutstandingInvoice {
   final String customerName;
 }
 
-class RecommendedProduct {
-  const RecommendedProduct({
-    required this.id,
-    required this.name,
-    required this.lastPurchasedQty,
-    required this.suggestedQty,
-    this.imageUrl,
-    this.category = '',
+/// One sellable UOM for an item (base or ITEMALTERNATEUOMMAP row).
+class ItemUomOption {
+  const ItemUomOption({
+    required this.code,
+    this.retailPrice = 0,
+    this.conversionFactor = 1,
+    this.isBase = false,
   });
 
-  final String id;
-  final String name;
-  final double lastPurchasedQty;
-  final double suggestedQty;
-  final String? imageUrl;
-  final String category;
+  final String code;
+  final double retailPrice;
+  final double conversionFactor;
+  final bool isBase;
+
+  factory ItemUomOption.fromJson(Map<String, dynamic> json) {
+    return ItemUomOption(
+      code: json['code']?.toString().trim() ?? '',
+      retailPrice: _cacheToDouble(json['retailprice'] ?? json['retailPrice']),
+      conversionFactor:
+          _cacheToDouble(json['conversionfactor'] ?? json['conversionFactor']),
+      isBase: json['isBase'] == true || json['isbase'] == true,
+    );
+  }
+
+  static double _cacheToDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
 }
 
 class AlternativeProductModel {
@@ -1237,6 +1230,8 @@ class AlternativeProductModel {
     this.baseUom = '',
     this.stock = 0,
     this.qtyLimit = 0,
+    this.lastUpdated,
+    this.isOwnProduct = false,
   });
 
   final String id;
@@ -1250,8 +1245,60 @@ class AlternativeProductModel {
   final double stock;
   /// QUANTITYLIMIT from ITEMMASTER. When > 0, max order qty is this value.
   final double qtyLimit;
+  /// Optional ITEMMASTER last-updated timestamp (ISO string) for delta sync.
+  final String? lastUpdated;
+  /// ITEMMASTER.OWNPRODUCT = 'Y'.
+  final bool isOwnProduct;
 
   bool get hasQtyLimit => qtyLimit > 0;
+
+  Map<String, dynamic> toCacheMap() => {
+        'id': id,
+        'name': name,
+        'imageUrl': imageUrl,
+        'details': details,
+        'category': category,
+        'unitPrice': unitPrice,
+        'baseUom': baseUom,
+        'stock': stock,
+        'qtyLimit': qtyLimit,
+        'isOwnProduct': isOwnProduct,
+        if (lastUpdated != null && lastUpdated!.isNotEmpty)
+          'lastUpdated': lastUpdated,
+      };
+
+  factory AlternativeProductModel.fromCacheMap(Map<String, dynamic> json) {
+    return AlternativeProductModel(
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      imageUrl: json['imageUrl']?.toString() ?? '',
+      details: json['details']?.toString() ?? '',
+      category: json['category']?.toString() ?? 'All Products',
+      unitPrice: _cacheToDouble(json['unitPrice']),
+      baseUom: json['baseUom']?.toString() ?? '',
+      stock: _cacheToDouble(json['stock']),
+      qtyLimit: _cacheToDouble(json['qtyLimit']),
+      lastUpdated: json['lastUpdated']?.toString(),
+      isOwnProduct: _cacheToBool(json['isOwnProduct'] ?? json['ownproduct']),
+    );
+  }
+
+  static bool _cacheToBool(dynamic value) {
+    if (value is bool) return value;
+    // Handles CHAR padding / values like 'Y '.
+    final text =
+        value?.toString().replaceAll(RegExp(r'\s+'), '').toUpperCase() ?? '';
+    return text == 'Y' ||
+        text == 'YES' ||
+        text == 'TRUE' ||
+        text == '1' ||
+        text == 'T';
+  }
+
+  static double _cacheToDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
 
   String get priceLabel {
     if (unitPrice <= 0) return '';
@@ -1374,22 +1421,6 @@ class OrderedProductModel {
   final String category;
   final double unitPrice;
   final List<AlternativeProductModel> alternatives;
-}
-
-class ActivityModel {
-  const ActivityModel({
-    required this.id,
-    required this.title,
-    required this.subtitle,
-    required this.timestamp,
-    required this.icon,
-  });
-
-  final String id;
-  final String title;
-  final String subtitle;
-  final DateTime timestamp;
-  final String icon;
 }
 
 class NotificationModel {

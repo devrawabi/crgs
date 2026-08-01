@@ -9,9 +9,9 @@ import { Table } from '../components/ui/Table'
 import { useApp } from '../context/AppContext'
 import { STATUS_COLORS, TASK_TYPE_LABELS } from '../data/mockData'
 import type { TaskType } from '../types'
-import { fetchRoutes, type DbRoute } from '../api/routes'
+import { fetchAllRoutes, type DbRoute } from '../api/routes'
 import {
-  fetchUsers,
+  fetchAllUsers,
   formatRouteColumn,
   isRouteNoSelected,
   parseRouteColumn,
@@ -60,6 +60,19 @@ const TASK_TYPES: { value: TaskType; label: string }[] = [
   { value: 'other', label: 'Other' },
 ]
 
+const EMPTY_FORM = {
+  type: 'missing_customer_followup' as TaskType,
+  otherType: '',
+  employeeCode: '',
+  routeNos: [] as string[],
+  dueDate: '',
+  notes: '',
+}
+
+function taskTypeLabel(type: string) {
+  return TASK_TYPE_LABELS[type] ?? type
+}
+
 export function TasksPage() {
   const { syncExecutivesFromDb } = useApp()
   const [dbExecutives, setDbExecutives] = useState<DbLoginUser[]>([])
@@ -68,20 +81,17 @@ export function TasksPage() {
   const [routesLoading, setRoutesLoading] = useState(true)
   const [executivesLoading, setExecutivesLoading] = useState(true)
   const [tasksLoading, setTasksLoading] = useState(true)
+  const [tasksLoadingMore, setTasksLoadingMore] = useState(false)
+  const [tasksHasMore, setTasksHasMore] = useState(false)
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [deletingKey, setDeletingKey] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [filter, setFilter] = useState<string>('all')
+  const TASK_PAGE_SIZE = 100
 
-  const [form, setForm] = useState({
-    type: 'missing_customer_followup' as TaskType,
-    employeeCode: '',
-    routeNos: [] as string[],
-    dueDate: '',
-    notes: '',
-  })
+  const [form, setForm] = useState(EMPTY_FORM)
 
   const activeExecutives = useMemo(
     () => dbExecutives.filter((e) => isActiveExecutive(e.flag)),
@@ -91,7 +101,7 @@ export function TasksPage() {
   const loadExecutives = useCallback(async () => {
     setExecutivesLoading(true)
     try {
-      const data = await fetchUsers({ activeOnly: true })
+      const data = await fetchAllUsers({ activeOnly: true })
       setDbExecutives(data.users)
       syncExecutivesFromDb(data.users)
     } catch {
@@ -104,7 +114,7 @@ export function TasksPage() {
   const loadRoutes = useCallback(async () => {
     setRoutesLoading(true)
     try {
-      const data = await fetchRoutes()
+      const data = await fetchAllRoutes()
       setDbRoutes(data.routes)
     } catch {
       setDbRoutes([])
@@ -117,21 +127,49 @@ export function TasksPage() {
     setTasksLoading(true)
     setTasksError(null)
     try {
-      const data = await fetchTasks()
+      const data = await fetchTasks({
+        limit: TASK_PAGE_SIZE,
+        offset: 0,
+        type: filter === 'all' ? undefined : filter,
+      })
       setDbTasks(data.tasks)
+      setTasksHasMore(data.has_more === true)
     } catch (err) {
       setDbTasks([])
+      setTasksHasMore(false)
       setTasksError(err instanceof Error ? err.message : 'Failed to load tasks')
     } finally {
       setTasksLoading(false)
     }
-  }, [])
+  }, [filter])
+
+  const loadMoreTasks = useCallback(async () => {
+    if (tasksLoadingMore || !tasksHasMore) return
+    setTasksLoadingMore(true)
+    setTasksError(null)
+    try {
+      const data = await fetchTasks({
+        limit: TASK_PAGE_SIZE,
+        offset: dbTasks.length,
+        type: filter === 'all' ? undefined : filter,
+      })
+      setDbTasks((prev) => [...prev, ...data.tasks])
+      setTasksHasMore(data.has_more === true)
+    } catch (err) {
+      setTasksError(err instanceof Error ? err.message : 'Failed to load more tasks')
+    } finally {
+      setTasksLoadingMore(false)
+    }
+  }, [dbTasks.length, filter, tasksHasMore, tasksLoadingMore])
 
   useEffect(() => {
     loadExecutives()
     loadRoutes()
+  }, [loadExecutives, loadRoutes])
+
+  useEffect(() => {
     loadTasks()
-  }, [loadExecutives, loadRoutes, loadTasks])
+  }, [loadTasks])
 
   const getAssignedRoutes = useCallback(
     (employeeCode: string): DbRoute[] => {
@@ -154,8 +192,7 @@ export function TasksPage() {
     [getAssignedRoutes, selectedEmployeeCode]
   )
 
-  const filteredTasks =
-    filter === 'all' ? dbTasks : dbTasks.filter((t) => t.type === filter)
+  const filteredTasks = dbTasks
 
   const getExecutiveNameByCode = (employeeCode: string) => {
     if (!employeeCode) return 'Unassigned'
@@ -179,7 +216,7 @@ export function TasksPage() {
 
   const handleDeleteTask = async (task: DbTask, index: number) => {
     const key = taskKey(task, index)
-    const label = TASK_TYPE_LABELS[task.type] ?? task.type
+    const label = taskTypeLabel(task.type)
     if (!window.confirm(`Delete task "${label}" for ${getExecutiveNameByCode(task.employeeCode)}?`)) {
       return
     }
@@ -204,6 +241,11 @@ export function TasksPage() {
     e.preventDefault()
     setFormError(null)
 
+    const customType = form.otherType.trim()
+    if (form.type === 'other' && !customType) {
+      setFormError('Enter a custom task type')
+      return
+    }
     if (!selectedEmployeeCode) {
       setFormError('Select an executive')
       return
@@ -219,20 +261,25 @@ export function TasksPage() {
 
     setSubmitting(true)
     try {
-      await createTask({
-        type: form.type,
-        employeeCode: selectedEmployeeCode,
-        routeNo: formatRouteColumn(form.routeNos),
-        dueDate: form.dueDate,
-      })
+      // Other → CRGS_TASK.TYPE = Other Type text (via type + otherType).
+      const payload =
+        form.type === 'other'
+          ? {
+              type: 'other' as const,
+              otherType: customType,
+              employeeCode: selectedEmployeeCode,
+              routeNo: formatRouteColumn(form.routeNos),
+              dueDate: form.dueDate,
+            }
+          : {
+              type: form.type,
+              employeeCode: selectedEmployeeCode,
+              routeNo: formatRouteColumn(form.routeNos),
+              dueDate: form.dueDate,
+            }
+      await createTask(payload)
       await loadTasks()
-      setForm({
-        type: 'missing_customer_followup',
-        employeeCode: '',
-        routeNos: [],
-        dueDate: '',
-        notes: '',
-      })
+      setForm(EMPTY_FORM)
       setModalOpen(false)
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Failed to create task')
@@ -261,7 +308,7 @@ export function TasksPage() {
             filter === 'all' ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600'
           }`}
         >
-          All ({dbTasks.length})
+          All
         </button>
         {TASK_TYPES.map((tt) => (
           <button
@@ -271,8 +318,7 @@ export function TasksPage() {
               filter === tt.value ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600'
             }`}
           >
-            {tt.label.split(' ').slice(0, 2).join(' ')} (
-            {dbTasks.filter((t) => t.type === tt.value).length})
+            {tt.label.split(' ').slice(0, 2).join(' ')}
           </button>
         ))}
       </div>
@@ -308,7 +354,7 @@ export function TasksPage() {
               const key = taskKey(task, index)
               return (
                 <tr key={key} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-xs text-gray-600">{TASK_TYPE_LABELS[task.type]}</td>
+                  <td className="px-4 py-3 text-xs text-gray-600">{taskTypeLabel(task.type)}</td>
                   <td className="px-4 py-3">{getExecutiveNameByCode(task.employeeCode)}</td>
                   <td className="px-4 py-3 text-gray-600 text-sm">
                     <RouteTargetCell routeNames={getRouteNamesFromNos(task.routeNo)} />
@@ -343,9 +389,30 @@ export function TasksPage() {
             })
           )}
         </Table>
+        {tasksHasMore && (
+          <div className="mt-4 flex justify-center">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={tasksLoadingMore || tasksLoading}
+              onClick={loadMoreTasks}
+            >
+              {tasksLoadingMore ? 'Loading…' : 'Load more tasks'}
+            </Button>
+          </div>
+        )}
       </Card>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Create Task" wide>
+      <Modal
+        open={modalOpen}
+        onClose={() => {
+          setModalOpen(false)
+          setFormError(null)
+          setForm(EMPTY_FORM)
+        }}
+        title="Create Task"
+        wide
+      >
         <form onSubmit={handleSubmit} className="space-y-4">
           {formError && (
             <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -356,9 +423,14 @@ export function TasksPage() {
             <select
               className={selectClass}
               value={form.type}
-              onChange={(e) =>
-                setForm({ ...form, type: e.target.value as TaskType })
-              }
+              onChange={(e) => {
+                const type = e.target.value as TaskType
+                setForm({
+                  ...form,
+                  type,
+                  otherType: type === 'other' ? form.otherType : '',
+                })
+              }}
             >
               {TASK_TYPES.map((tt) => (
                 <option key={tt.value} value={tt.value}>
@@ -367,6 +439,20 @@ export function TasksPage() {
               ))}
             </select>
           </FormField>
+          {form.type === 'other' && (
+            <FormField label="Other Type" required>
+              <input
+                type="text"
+                className={inputClass}
+                value={form.otherType}
+                onChange={(e) => setForm({ ...form, otherType: e.target.value })}
+                placeholder="Enter custom task type"
+                maxLength={50}
+                required
+                autoFocus
+              />
+            </FormField>
+          )}
           <FormField label="Assign Executive" required>
             <select
               className={selectClass}
@@ -416,7 +502,15 @@ export function TasksPage() {
           </FormField>
 
           <div className="flex justify-end gap-3 pt-2">
-            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setModalOpen(false)
+                setFormError(null)
+                setForm(EMPTY_FORM)
+              }}
+            >
               Cancel
             </Button>
             <Button type="submit" disabled={submitting}>

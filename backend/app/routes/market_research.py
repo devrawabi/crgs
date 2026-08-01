@@ -3,8 +3,13 @@
 from flask import Blueprint, current_app, jsonify, request
 
 from app.db import get_connection, oracle_cursor, row_to_dict
+from app.pagination import apply_has_more, parse_limit_offset, rownum_page_sql
+from app.security import enforce_owned_employee_code, resolve_employee_scope
 
 market_research_bp = Blueprint("market_research", __name__)
+
+_DEFAULT_LIMIT = 50
+_MAX_LIMIT = 200
 
 
 def _table_name() -> str:
@@ -33,46 +38,59 @@ def _serialize_research(row: dict) -> dict:
 
 @market_research_bp.get("")
 def list_market_research():
-    """List market research rows, optionally filtered by employee/route."""
+    """List market research rows (paginated)."""
     table_name = _table_name()
-    employee_code = str(request.args.get("employeeCode", "")).strip()
+    employee_code, scope_err = resolve_employee_scope(
+        request.args.get("employeeCode", "").strip()
+    )
+    if scope_err is not None:
+        return scope_err
     route = str(request.args.get("route", "")).strip()
+    limit, offset = parse_limit_offset(
+        default_limit=_DEFAULT_LIMIT,
+        max_limit=_MAX_LIMIT,
+    )
 
     conditions: list[str] = []
     params: dict = {}
     if employee_code:
-        conditions.append("TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode")
+        conditions.append("TRIM(EMPLOYEECODE) = :employeecode")
         params["employeecode"] = employee_code
     if route:
-        conditions.append("TRIM(TO_CHAR(ROUTE)) = :route")
+        conditions.append("TRIM(ROUTE) = :route")
         params["route"] = route
 
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    columns_sql = (
+        "EMPLOYEECODE, ROUTE, MARKETTREND, FASTMOVINGPRODUCTS, "
+        "SLOWMOVINGPRODUCTS, COMPETITORPROMOTIONS, NEWOPPORTUNITIES, NOTES"
+    )
+    # ROWID DESC keeps newest-first without needing a created-at column.
+    inner_sql = f"""
+        SELECT {columns_sql}
+        FROM {table_name}
+        {where_sql}
+        ORDER BY ROWID DESC
+    """
+    query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
+    params["max_row"] = offset + limit + 1
+    params["min_row"] = offset
 
     with oracle_cursor() as cursor:
-        cursor.execute(
-            f"""
-            SELECT
-                EMPLOYEECODE,
-                ROUTE,
-                MARKETTREND,
-                FASTMOVINGPRODUCTS,
-                SLOWMOVINGPRODUCTS,
-                COMPETITORPROMOTIONS,
-                NEWOPPORTUNITIES,
-                NOTES
-            FROM {table_name}
-            {where_sql}
-            ORDER BY ROWID DESC
-            """,
-            params,
-        )
-        rows = [
-            _serialize_research(row_to_dict(cursor, row))
-            for row in cursor.fetchall()
-        ]
+        cursor.execute(query, params)
+        fetched = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        fetched, has_more = apply_has_more(fetched, limit)
+        rows = [_serialize_research(row) for row in fetched]
 
-    return jsonify({"count": len(rows), "items": rows})
+    return jsonify(
+        {
+            "count": len(rows),
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "items": rows,
+        }
+    )
 
 
 @market_research_bp.post("")
@@ -84,7 +102,11 @@ def create_market_research():
     """
     payload = request.get_json(silent=True) or {}
 
-    employee_code = str(payload.get("employeeCode", "")).strip()
+    employee_code, owned_err = enforce_owned_employee_code(
+        payload.get("employeeCode")
+    )
+    if owned_err is not None:
+        return owned_err
     route = str(payload.get("route", "")).strip()
     market_trend = _clip(payload.get("marketTrend", ""), 500)
     fast_moving = _clip(payload.get("fastMovingProducts", ""), 500)

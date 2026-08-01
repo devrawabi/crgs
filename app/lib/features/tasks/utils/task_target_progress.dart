@@ -55,9 +55,9 @@ TaskTargetProgress? resolveTaskTargetProgress({
   if (customerType != null) {
     final matches = targets.customerByPeriod.where((t) {
       if (t.type != customerType) return false;
-      final targetRoute = normalizeRouteNo(t.routeNo);
-      if (routeNo.isEmpty || targetRoute.isEmpty) return true;
-      return targetRoute == routeNo;
+      final targetRoutes = parseRouteNos(t.routeNo);
+      if (routeNo.isEmpty || targetRoutes.isEmpty) return true;
+      return targetRoutes.contains(routeNo);
     }).toList();
 
     if (matches.isEmpty) return null;
@@ -84,9 +84,9 @@ TaskTargetProgress? resolveTaskTargetProgress({
   if (productType != null) {
     final matches = targets.productTargets.where((t) {
       if (t.type != productType) return false;
-      final targetRoute = normalizeRouteNo(t.routeNo);
-      if (routeNo.isEmpty || targetRoute.isEmpty) return true;
-      return targetRoute == routeNo;
+      final targetRoutes = parseRouteNos(t.routeNo);
+      if (routeNo.isEmpty || targetRoutes.isEmpty) return true;
+      return targetRoutes.contains(routeNo);
     }).toList();
 
     if (matches.isEmpty) return null;

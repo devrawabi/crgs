@@ -7,15 +7,18 @@ import { Modal } from '../components/ui/Modal'
 import { Card } from '../components/ui/Card'
 import { Table } from '../components/ui/Table'
 import { useApp } from '../context/AppContext'
-import { assignUserRoutes, createUser, fetchUsers, isRouteNoSelected, parseRouteColumn, toggleRouteNo, updateUserStatus, type DbLoginUser } from '../api/users'
+import { useAuth } from '../context/AuthContext'
+import { assignUserRoutes, createUser, fetchAllUsers, isRouteNoSelected, parseRouteColumn, toggleRouteNo, updateUserStatus, type DbLoginUser } from '../api/users'
 import { fetchDesignations, type DbDesignation } from '../api/designations'
-import { fetchRoutes, type DbRoute } from '../api/routes'
+import { fetchAllRoutes, type DbRoute } from '../api/routes'
 import { STATUS_COLORS } from '../data/mockData'
+import { canAssignRoleCode } from '../lib/roleAccess'
 import type { User } from '../types'
 
 const emptyForm = { username: '', employeeCode: '', password: '', roleCode: '' }
 
 export function UsersPage() {
+  const { user: authUser } = useAuth()
   const {
     updateUser,
     assignRoutesByEmployeeCode,
@@ -49,7 +52,7 @@ export function UsersPage() {
     setListError(null)
 
     try {
-      const data = await fetchUsers()
+      const data = await fetchAllUsers()
       setExecutives(data.users)
       syncExecutivesFromDb(data.users)
     } catch (err) {
@@ -65,7 +68,7 @@ export function UsersPage() {
     setRoutesError(null)
 
     try {
-      const data = await fetchRoutes()
+      const data = await fetchAllRoutes()
       setDbRoutes(data.routes)
     } catch (err) {
       setDbRoutes([])
@@ -153,6 +156,14 @@ export function UsersPage() {
     )
   }, [dbRoutes, routeSearch])
 
+  const assignableDesignations = useMemo(
+    () =>
+      designations.filter((item) =>
+        canAssignRoleCode(authUser?.roleCode, item.rolecode)
+      ),
+    [designations, authUser?.roleCode]
+  )
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError(null)
@@ -170,6 +181,10 @@ export function UsersPage() {
 
     if (!form.roleCode) {
       setFormError('Designation is required')
+      return
+    }
+    if (!canAssignRoleCode(authUser?.roleCode, form.roleCode)) {
+      setFormError('Only role code 1 can create users with role code 1 or 9')
       return
     }
 
@@ -430,7 +445,7 @@ export function UsersPage() {
                       ? 'Failed to load designations'
                       : 'Select designation'}
                 </option>
-                {designations.map((item) => (
+                {assignableDesignations.map((item) => (
                   <option key={item.rolecode} value={item.rolecode}>
                     {item.designation}
                   </option>
@@ -439,6 +454,13 @@ export function UsersPage() {
               {designationsError && (
                 <p className="mt-1 text-xs text-red-600">{designationsError}</p>
               )}
+              {!designationsError &&
+                authUser?.roleCode !== '1' &&
+                designations.length > assignableDesignations.length && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Role codes 1 and 9 can only be assigned by role code 1.
+                  </p>
+                )}
             </FormField>
           )}
           <div className="flex justify-end gap-3 pt-2">
@@ -449,7 +471,10 @@ export function UsersPage() {
               type="submit"
               disabled={
                 submitting ||
-                (!editUser && (designationsLoading || Boolean(designationsError) || designations.length === 0))
+                (!editUser &&
+                  (designationsLoading ||
+                    Boolean(designationsError) ||
+                    assignableDesignations.length === 0))
               }
             >
               {submitting ? (

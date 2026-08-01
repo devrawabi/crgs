@@ -9,8 +9,13 @@ from flask import Blueprint, current_app, jsonify, request, send_from_directory,
 from werkzeug.utils import secure_filename
 
 from app.db import get_connection, oracle_cursor, row_to_dict
+from app.pagination import apply_has_more, parse_limit_offset, rownum_page_sql
+from app.security import enforce_owned_employee_code, resolve_employee_scope
 
 product_reviews_bp = Blueprint("product_reviews", __name__)
+
+_DEFAULT_LIMIT = 50
+_MAX_LIMIT = 200
 
 _ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB
@@ -64,13 +69,25 @@ def _read_payload() -> tuple[dict, object | None]:
     return request.get_json(silent=True) or {}, None
 
 
+def _detect_image_extension(header: bytes) -> str | None:
+    if header.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
+        return ".gif"
+    if len(header) >= 12 and header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
 def _save_image(image_file) -> str | None:
     if image_file is None or not getattr(image_file, "filename", None):
         return None
 
     original = secure_filename(image_file.filename)
-    extension = Path(original).suffix.lower()
-    if extension not in _ALLOWED_IMAGE_EXTENSIONS:
+    claimed_ext = Path(original).suffix.lower()
+    if claimed_ext not in _ALLOWED_IMAGE_EXTENSIONS:
         raise ValueError("Image must be JPG, PNG, WEBP, or GIF")
 
     image_file.stream.seek(0, 2)
@@ -81,6 +98,14 @@ def _save_image(image_file) -> str | None:
     if size > _MAX_IMAGE_BYTES:
         raise ValueError("Image must be 8 MB or smaller")
 
+    header = image_file.stream.read(16)
+    image_file.stream.seek(0)
+    detected = _detect_image_extension(header)
+    if not detected:
+        raise ValueError("Image content is not a valid JPG, PNG, WEBP, or GIF")
+    # Prefer magic-byte type over client-claimed extension.
+    extension = detected
+
     filename = f"{uuid.uuid4().hex}{extension}"
     destination = _uploads_dir() / filename
     image_file.save(destination)
@@ -89,20 +114,28 @@ def _save_image(image_file) -> str | None:
 
 @product_reviews_bp.get("")
 def list_product_reviews():
-    """List product reviews from CRGS_PRODUCTREVIEW (for admin report)."""
+    """List product reviews from CRGS_PRODUCTREVIEW (paginated)."""
     table_name = _table_name()
     search = str(request.args.get("search", "")).strip()
-    employee_code = str(request.args.get("employeeCode", "")).strip()
+    employee_code, scope_err = resolve_employee_scope(
+        request.args.get("employeeCode", "").strip()
+    )
+    if scope_err is not None:
+        return scope_err
     route = str(request.args.get("route", "")).strip()
+    limit, offset = parse_limit_offset(
+        default_limit=_DEFAULT_LIMIT,
+        max_limit=_MAX_LIMIT,
+    )
 
     conditions: list[str] = []
     params: dict = {}
 
     if employee_code:
-        conditions.append("TRIM(TO_CHAR(EMPLOYEECODE)) = :employeecode")
+        conditions.append("TRIM(EMPLOYEECODE) = :employeecode")
         params["employeecode"] = employee_code
     if route:
-        conditions.append("TRIM(TO_CHAR(ROUTE)) = :route")
+        conditions.append("TRIM(ROUTE) = :route")
         params["route"] = route
     if search:
         conditions.append(
@@ -119,30 +152,35 @@ def list_product_reviews():
         params["search"] = f"%{search.upper()}%"
 
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    columns_sql = (
+        "EMPLOYEECODE, ROUTE, CUSTOMERCODE, CUSTOMERNAME, "
+        "ITEMCODE, ITEMNAME, REASON, IMAGEPATH"
+    )
+    inner_sql = f"""
+        SELECT {columns_sql}
+        FROM {table_name}
+        {where_sql}
+        ORDER BY EMPLOYEECODE, ROUTE, CUSTOMERNAME, ITEMNAME
+    """
+    query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
+    params["max_row"] = offset + limit + 1
+    params["min_row"] = offset
 
     with oracle_cursor() as cursor:
-        cursor.execute(
-            f"""
-            SELECT
-                EMPLOYEECODE,
-                ROUTE,
-                CUSTOMERCODE,
-                CUSTOMERNAME,
-                ITEMCODE,
-                ITEMNAME,
-                REASON,
-                IMAGEPATH
-            FROM {table_name}
-            {where_sql}
-            ORDER BY EMPLOYEECODE, ROUTE, CUSTOMERNAME, ITEMNAME
-            """,
-            params,
-        )
-        items = [
-            _serialize_review(row_to_dict(cursor, row)) for row in cursor.fetchall()
-        ]
+        cursor.execute(query, params)
+        fetched = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        fetched, has_more = apply_has_more(fetched, limit)
+        items = [_serialize_review(row) for row in fetched]
 
-    return jsonify({"count": len(items), "items": items})
+    return jsonify(
+        {
+            "count": len(items),
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "items": items,
+        }
+    )
 
 
 @product_reviews_bp.get("/images/<path:filename>")
@@ -163,7 +201,11 @@ def create_product_review():
     """
     payload, image_file = _read_payload()
 
-    employee_code = str(payload.get("employeeCode", "")).strip()
+    employee_code, owned_err = enforce_owned_employee_code(
+        payload.get("employeeCode")
+    )
+    if owned_err is not None:
+        return owned_err
     route = str(payload.get("route", "")).strip()
     customer_code = str(payload.get("customerCode", "")).strip()
     customer_name = str(payload.get("customerName", "")).strip()

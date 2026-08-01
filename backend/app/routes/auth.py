@@ -1,8 +1,22 @@
+import os
+
 from flask import Blueprint, current_app, g, jsonify, request
 from flask_limiter import Limiter
 
 from app.db import get_connection, oracle_cursor, row_to_dict
-from app.security.passwords import hash_password, is_password_hash, verify_password
+from app.security import (
+    is_admin,
+    is_call_center,
+    is_full_admin,
+    is_manager,
+    normalize_role_code,
+    trusted_client_ip,
+)
+from app.security.passwords import (
+    hash_password,
+    is_password_hash,
+    verify_password,
+)
 from app.security.tokens import create_access_token
 
 auth_bp = Blueprint("auth", __name__)
@@ -11,17 +25,13 @@ ACTIVE_FLAG = "A"
 ONBOARD_COMPLETE_FLAG = "Y"
 
 
-def _client_ip():
-    forwarded = request.headers.get("CF-Connecting-IP") or request.headers.get(
-        "X-Forwarded-For", ""
-    )
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.remote_addr or "unknown"
-
-
-# Shared limiter instance; bound to app in create_app
-limiter = Limiter(key_func=_client_ip, default_limits=[])
+# Shared limiter instance; bound to app in create_app.
+# Explicit memory:// avoids the default-storage warning for single-process Waitress.
+limiter = Limiter(
+    key_func=trusted_client_ip,
+    default_limits=[],
+    storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"),
+)
 
 
 def _table_name():
@@ -95,9 +105,7 @@ def login():
 
         route = _normalize_route(data.get("route"))
         onboard_flag = _normalize_onboard(data.get("onboard_flag"))
-        role_code = data.get("rolecode")
-        if role_code is not None:
-            role_code = str(role_code).strip()
+        role_code = normalize_role_code(data.get("rolecode"))
 
     token = create_access_token(
         employee_code=data["employeecode"],
@@ -110,10 +118,28 @@ def login():
         {
             "token": token,
             "tokenType": "Bearer",
-            "expiresInHours": int(current_app.config.get("JWT_EXPIRE_HOURS", 12)),
+            "expiresInHours": int(current_app.config.get("JWT_EXPIRE_HOURS", 4)),
             "username": data["username"],
             "employeeCode": data["employeecode"],
             "roleCode": role_code,
+            "isAdmin": is_full_admin(
+                {
+                    "employeeCode": str(data["employeecode"]),
+                    "roleCode": role_code,
+                }
+            ),
+            "isManager": is_manager(
+                {
+                    "employeeCode": str(data["employeecode"]),
+                    "roleCode": role_code,
+                }
+            ),
+            "isCallCenter": is_call_center(
+                {
+                    "employeeCode": str(data["employeecode"]),
+                    "roleCode": role_code,
+                }
+            ),
             "flag": data["flag"],
             "route": route,
             "onboardFlag": onboard_flag,
@@ -126,7 +152,13 @@ def me():
     user = getattr(g, "current_user", None)
     if not user:
         return jsonify({"error": "Authentication required"}), 401
-    return jsonify(user)
+    payload = dict(user)
+    payload["isAdmin"] = is_full_admin(user)
+    payload["isManager"] = is_manager(user)
+    payload["isCallCenter"] = is_call_center(user)
+    # Broader flag: management API scope (admin or manager).
+    payload["canManage"] = is_admin(user)
+    return jsonify(payload)
 
 
 @auth_bp.patch("/onboarding")

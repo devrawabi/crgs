@@ -4,8 +4,8 @@ import { PageHeader, inputClass } from '../components/ui/PageHeader'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
 import { useApp } from '../context/AppContext'
-import { fetchRoutes, type DbRoute } from '../api/routes'
-import { assignUserRoutes, fetchUsers, isRouteNoSelected, parseRouteColumn, toggleRouteNo, type DbLoginUser } from '../api/users'
+import { fetchAllRoutes, type DbRoute } from '../api/routes'
+import { assignUserRoutes, fetchAllUsers, isRouteNoSelected, parseRouteColumn, toggleRouteNo, type DbLoginUser } from '../api/users'
 
 export function RoutesPage() {
   const { assignRoutesByEmployeeCode, syncExecutivesFromDb } = useApp()
@@ -30,7 +30,7 @@ export function RoutesPage() {
     setExecutivesError(null)
 
     try {
-      const data = await fetchUsers({ activeOnly: true })
+      const data = await fetchAllUsers({ activeOnly: true })
       setExecutives(data.users)
       syncExecutivesFromDb(data.users)
     } catch (err) {
@@ -49,7 +49,7 @@ export function RoutesPage() {
       setRoutesError(null)
 
       try {
-        const data = await fetchRoutes()
+        const data = await fetchAllRoutes()
         if (!cancelled) {
           setDbRoutes(data.routes)
         }

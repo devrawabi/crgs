@@ -7,17 +7,10 @@ abstract final class AppConstants {
   static const String companyName = 'Field Sales Platform';
 
   static const Duration animationDuration = Duration(milliseconds: 300);
-  static const Duration pageTransitionDuration = Duration(milliseconds: 350);
-
-  static const double mobileBreakpoint = 600;
-  static const double tabletBreakpoint = 900;
 
   static const double cardRadius = 0;
   static const double buttonRadius = 0;
   static const double badgeRadius = 0;
-
-  static const double defaultPadding = 16;
-  static const double sectionSpacing = 24;
 }
 
 abstract final class ApiEndpoints {
@@ -25,12 +18,8 @@ abstract final class ApiEndpoints {
 
   // Auth (CRGS-Admin backend)
   static const String login = '/auth/login';
+  static const String me = '/auth/me';
   static const String onboarding = '/auth/onboarding';
-
-  // Users (CRGS-Admin backend)
-  static const String users = '/users';
-  static const String userRoutes = '/users/routes';
-  static const String userStatus = '/users/status';
 
   // Routes (CRGS-Admin backend)
   static const String routes = '/routes';
@@ -67,9 +56,8 @@ abstract final class ApiEndpoints {
   static const String productTargets = '/targets/products';
   static const String customerTargets = '/targets/customers';
 
-  // Items (CRGS-Admin backend — ITEMMASTER)
+  // Items (CRGS-Admin backend — ITEMMASTER / ITEMALTERNATEUOMMAP)
   static const String items = '/items';
-
-  // Health
-  static const String health = '/health';
+  static String itemUoms(String itemCode) =>
+      '/items/${Uri.encodeComponent(itemCode)}/uoms';
 }

@@ -8,6 +8,7 @@ import {
   BarChart3,
   UserPlus,
   PackageSearch,
+  Headset,
   Menu,
   X,
   LogOut,
@@ -15,22 +16,31 @@ import {
 import { useState } from 'react'
 import logo from '../../assets/crgs-logo.png'
 import { useAuth } from '../../context/AuthContext'
+import { canAccessNav, type PortalNavKey } from '../../lib/roleAccess'
 
-const navItems = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/users', label: 'User Management', icon: Users },
-  { to: '/routes', label: 'Route Management', icon: MapPin },
-  { to: '/targets', label: 'Target Management', icon: Target },
-  { to: '/tasks', label: 'Task Management', icon: ClipboardList },
-  { to: '/customer-requests', label: 'Customer Request', icon: UserPlus },
-  { to: '/product-review-report', label: 'Product Review Report', icon: PackageSearch },
-  { to: '/reports', label: 'Reports', icon: BarChart3 },
+const navItems: { to: string; label: string; icon: typeof LayoutDashboard; key: PortalNavKey }[] = [
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, key: 'dashboard' },
+  { to: '/users', label: 'User Management', icon: Users, key: 'users' },
+  { to: '/routes', label: 'Route Management', icon: MapPin, key: 'routes' },
+  { to: '/targets', label: 'Target Management', icon: Target, key: 'targets' },
+  { to: '/tasks', label: 'Task Management', icon: ClipboardList, key: 'tasks' },
+  { to: '/customer-requests', label: 'Customer Request', icon: UserPlus, key: 'customer-requests' },
+  {
+    to: '/product-review-report',
+    label: 'Product Review Report',
+    icon: PackageSearch,
+    key: 'product-review-report',
+  },
+  { to: '/call-center', label: 'Call Center', icon: Headset, key: 'call-center' },
+  { to: '/reports', label: 'Reports', icon: BarChart3, key: 'reports' },
 ]
 
 export function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+
+  const visibleNav = navItems.filter((item) => canAccessNav(user?.roleCode, item.key))
 
   const handleLogout = () => {
     logout()
@@ -73,7 +83,7 @@ export function Layout() {
         </div>
 
         <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1">
-          {navItems.map(({ to, label, icon: Icon }) => (
+          {visibleNav.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}

@@ -1,14 +1,20 @@
 import logging
+import re
 
 from dotenv import load_dotenv
 from flask import Flask, g, jsonify, request
+from flask_compress import Compress
 from flask_cors import CORS
 import oracledb
 
+# Flutter web / Vite use random localhost ports; allow any local origin.
+_LOCAL_DEV_ORIGIN = re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$")
+
 from app.config import Config
-from app.db import init_oracle_pool, oracle_cursor
+from app.db import init_oracle_pool, oracle_cursor, pool_stats
 from app.routes.auth import auth_bp, limiter
 from app.routes.customers import customers_bp
+from app.routes.dashboard import dashboard_bp
 from app.routes.designations import designations_bp
 from app.routes.routes_data import routes_data_bp
 from app.routes.users import users_bp
@@ -25,17 +31,39 @@ logger = logging.getLogger(__name__)
 
 
 def create_app(config_class=Config):
+    # Config already loads backend/.env; keep a no-op-safe call for process env.
     load_dotenv()
 
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    if not app.config.get("SECRET_KEY"):
+    secret = str(app.config.get("SECRET_KEY") or "")
+    if not secret:
         raise RuntimeError("SECRET_KEY is required")
+    min_secret = int(app.config.get("SECRET_KEY_MIN_LENGTH", 32))
+    if len(secret) < min_secret:
+        raise RuntimeError(
+            f"SECRET_KEY must be at least {min_secret} characters "
+            "(rotate if this key was ever committed to git)"
+        )
     if not app.config.get("ORACLE_USER") or not app.config.get("ORACLE_DSN"):
         raise RuntimeError("ORACLE_USER and ORACLE_DSN are required")
     if not app.config.get("ORACLE_PASSWORD"):
         raise RuntimeError("ORACLE_PASSWORD is required")
+
+    flask_env = str(app.config.get("FLASK_ENV", "production")).lower()
+    admin_roles = app.config.get("ADMIN_ROLE_CODES") or []
+    require_admin = app.config.get("REQUIRE_ADMIN_ROLES", True)
+    if require_admin and flask_env != "development" and not admin_roles:
+        raise RuntimeError(
+            "ADMIN_ROLE_CODES must be set in production "
+            "(comma-separated ROLECODE values for user/admin APIs)"
+        )
+
+    if app.config.get("CORS_ALLOW_ALL") and flask_env != "development":
+        raise RuntimeError(
+            "CORS_ALLOW_ALL cannot be enabled outside development"
+        )
 
     app.config["MAX_CONTENT_LENGTH"] = app.config.get(
         "MAX_CONTENT_LENGTH", 10 * 1024 * 1024
@@ -49,11 +77,12 @@ def create_app(config_class=Config):
             allow_headers=["Authorization", "Content-Type"],
         )
     else:
+        cors_origins = list(app.config["CORS_ORIGINS"]) + [_LOCAL_DEV_ORIGIN]
         CORS(
             app,
             resources={
                 r"/api/*": {
-                    "origins": app.config["CORS_ORIGINS"],
+                    "origins": cors_origins,
                     "allow_headers": ["Authorization", "Content-Type"],
                     "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
                 }
@@ -63,6 +92,17 @@ def create_app(config_class=Config):
 
     limiter.init_app(app)
     init_oracle_pool(app)
+
+    # Gzip JSON responses (ITEMMASTER pages compress extremely well over tunnel/mobile).
+    app.config.setdefault("COMPRESS_MIMETYPES", [
+        "application/json",
+        "text/html",
+        "text/css",
+        "application/javascript",
+    ])
+    app.config.setdefault("COMPRESS_LEVEL", 6)
+    app.config.setdefault("COMPRESS_MIN_SIZE", 500)
+    Compress(app)
 
     @app.before_request
     def enforce_authentication():
@@ -83,14 +123,25 @@ def create_app(config_class=Config):
             "Permissions-Policy", "geolocation=(), microphone=(), camera=()"
         )
         response.headers.setdefault(
-            "Cache-Control", "no-store" if request.path.startswith("/api/") else "no-cache"
+            "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
         )
+        if request.is_secure or request.headers.get("X-Forwarded-Proto") == "https":
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
+        # Private data defaults to no-store; semi-static catalog routes may
+        # override with short private max-age + ETag (see designations/routes).
+        if request.path.startswith("/api/") and "Cache-Control" not in response.headers:
+            response.headers["Cache-Control"] = "no-store"
+        elif not request.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
         # Remove server fingerprint when possible
         response.headers.pop("Server", None)
         return response
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(customers_bp, url_prefix="/api/customers")
+    app.register_blueprint(dashboard_bp, url_prefix="/api/dashboard")
     app.register_blueprint(designations_bp, url_prefix="/api/designations")
     app.register_blueprint(routes_data_bp, url_prefix="/api/routes")
     app.register_blueprint(users_bp, url_prefix="/api/users")
@@ -117,11 +168,23 @@ def create_app(config_class=Config):
 
     @app.get("/api/health/db")
     def health_db():
+        # Authenticated — avoids unauthenticated pool/recon disclosure.
+        user = getattr(g, "current_user", None)
+        if not user:
+            return jsonify({"error": "Authentication required"}), 401
         try:
             with oracle_cursor() as cursor:
                 cursor.execute("SELECT 1 FROM DUAL")
                 cursor.fetchone()
-            return jsonify({"status": "ok", "database": "connected"})
+            payload = {
+                "status": "ok",
+                "database": "connected",
+            }
+            from app.security import is_admin
+
+            if is_admin(user):
+                payload["pool"] = pool_stats()
+            return jsonify(payload)
         except Exception:
             logger.exception("Database health check failed")
             return jsonify({"status": "error", "database": "unavailable"}), 503

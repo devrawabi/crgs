@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPost } from './client'
+import { fetchAllPages } from './paginate'
 import type { CustomerTargetType, ProductTargetType, TargetPeriod } from '../types'
 
 export interface DbSalesTarget {
@@ -13,6 +14,9 @@ export interface DbSalesTarget {
 
 export interface SalesTargetsResponse {
   count: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   targets: DbSalesTarget[]
 }
 
@@ -34,8 +38,35 @@ export interface CreateSalesTargetResponse {
   dueDate: string
 }
 
-export function fetchSalesTargets() {
-  return apiGet<SalesTargetsResponse>('/api/targets/sales')
+export interface FetchSalesTargetsParams {
+  employeeCode?: string
+  period?: TargetPeriod
+  limit?: number
+  offset?: number
+}
+
+export function fetchSalesTargets(params: FetchSalesTargetsParams = {}) {
+  return apiGet<SalesTargetsResponse>('/api/targets/sales', {
+    employeeCode: params.employeeCode,
+    period: params.period,
+    limit: params.limit ?? 200,
+    offset: params.offset ?? 0,
+  })
+}
+
+/** Walk pages when a screen still needs the full filtered set. */
+export async function fetchAllSalesTargets(
+  params: Omit<FetchSalesTargetsParams, 'limit' | 'offset'> = {}
+) {
+  const targets = await fetchAllPages<DbSalesTarget>({
+    pageSize: 200,
+    itemsKey: 'targets',
+    fetchPage: ({ limit, offset }) =>
+      fetchSalesTargets({ ...params, limit, offset }) as Promise<
+        Record<string, unknown>
+      >,
+  })
+  return { count: targets.length, targets }
 }
 
 export function createSalesTarget(payload: CreateSalesTargetPayload) {
@@ -74,6 +105,9 @@ export interface DbProductTarget {
 
 export interface ProductTargetsResponse {
   count: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   targets: DbProductTarget[]
 }
 
@@ -95,8 +129,32 @@ export interface CreateProductTargetResponse {
   routeNo: string
 }
 
-export function fetchProductTargets() {
-  return apiGet<ProductTargetsResponse>('/api/targets/products')
+export interface FetchProductTargetsParams {
+  employeeCode?: string
+  limit?: number
+  offset?: number
+}
+
+export function fetchProductTargets(params: FetchProductTargetsParams = {}) {
+  return apiGet<ProductTargetsResponse>('/api/targets/products', {
+    employeeCode: params.employeeCode,
+    limit: params.limit ?? 200,
+    offset: params.offset ?? 0,
+  })
+}
+
+export async function fetchAllProductTargets(
+  params: Omit<FetchProductTargetsParams, 'limit' | 'offset'> = {}
+) {
+  const targets = await fetchAllPages<DbProductTarget>({
+    pageSize: 200,
+    itemsKey: 'targets',
+    fetchPage: ({ limit, offset }) =>
+      fetchProductTargets({ ...params, limit, offset }) as Promise<
+        Record<string, unknown>
+      >,
+  })
+  return { count: targets.length, targets }
 }
 
 export function createProductTarget(payload: CreateProductTargetPayload) {
@@ -129,6 +187,9 @@ export interface DbCustomerTarget {
 
 export interface CustomerTargetsResponse {
   count: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   /** Total CRGS_CONTACTINFO rows with FLAG = N (add customers). */
   newCustomersFlagN?: number
   targets: DbCustomerTarget[]
@@ -154,8 +215,47 @@ export interface CreateCustomerTargetResponse {
   routeNo: string
 }
 
-export function fetchCustomerTargets() {
-  return apiGet<CustomerTargetsResponse>('/api/targets/customers')
+export interface FetchCustomerTargetsParams {
+  employeeCode?: string
+  period?: TargetPeriod
+  limit?: number
+  offset?: number
+  /** Persist FLAG=N count into ACHIEVED for new_acquisition rows. */
+  refreshAchieved?: boolean
+}
+
+export function fetchCustomerTargets(params: FetchCustomerTargetsParams = {}) {
+  return apiGet<CustomerTargetsResponse>('/api/targets/customers', {
+    employeeCode: params.employeeCode,
+    period: params.period,
+    limit: params.limit ?? 200,
+    offset: params.offset ?? 0,
+    refreshAchieved: params.refreshAchieved ? 'true' : undefined,
+  })
+}
+
+export async function fetchAllCustomerTargets(
+  params: Omit<FetchCustomerTargetsParams, 'limit' | 'offset'> = {}
+) {
+  let newCustomersFlagN = 0
+  const targets = await fetchAllPages<DbCustomerTarget>({
+    pageSize: 200,
+    itemsKey: 'targets',
+    fetchPage: async ({ limit, offset }) => {
+      const response = await fetchCustomerTargets({
+        ...params,
+        // Refresh once on the first page only.
+        refreshAchieved: params.refreshAchieved && offset === 0,
+        limit,
+        offset,
+      })
+      if (typeof response.newCustomersFlagN === 'number') {
+        newCustomersFlagN = response.newCustomersFlagN
+      }
+      return response as unknown as Record<string, unknown>
+    },
+  })
+  return { count: targets.length, newCustomersFlagN, targets }
 }
 
 export function createCustomerTarget(payload: CreateCustomerTargetPayload) {

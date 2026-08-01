@@ -1,4 +1,5 @@
 import { apiGet } from './client'
+import { fetchAllPages } from './paginate'
 
 export interface DbCustomer {
   cust_code: string
@@ -61,12 +62,31 @@ export function fetchCustomerStats(route: string, missingDays?: number) {
   })
 }
 
-/** One grouped Oracle query for many routes (reports dashboard). */
-export function fetchCustomerStatsBatch(routes: string[], missingDays?: number) {
-  return apiGet<CustomerStatsBatchResponse>('/api/customers/stats', {
-    routes: routes.join(','),
-    missing_days: missingDays,
-  })
+const STATS_ROUTE_CHUNK = 40
+
+/** Grouped Oracle stats; chunks large route lists to keep plans predictable. */
+export async function fetchCustomerStatsBatch(
+  routes: string[],
+  missingDays?: number
+) {
+  const cleaned = routes.map((r) => r.trim()).filter(Boolean)
+  if (cleaned.length === 0) {
+    return { missing_days: missingDays ?? 0, routes: [] }
+  }
+
+  const merged: CustomerStatsBatchResponse['routes'] = []
+  for (let i = 0; i < cleaned.length; i += STATS_ROUTE_CHUNK) {
+    const chunk = cleaned.slice(i, i + STATS_ROUTE_CHUNK)
+    const batch = await apiGet<CustomerStatsBatchResponse>(
+      '/api/customers/stats',
+      {
+        routes: chunk.join(','),
+        missing_days: missingDays,
+      }
+    )
+    merged.push(...(batch.routes ?? []))
+  }
+  return { routes: merged }
 }
 
 export function fetchCustomers(params: FetchCustomersParams) {
@@ -100,19 +120,40 @@ export interface DbContactInfo {
 
 export interface ContactInfoResponse {
   count: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   items: DbContactInfo[]
 }
 
 export interface FetchContactInfoParams {
   status?: string
   search?: string
+  limit?: number
+  offset?: number
 }
 
 export function fetchContactInfo(params?: FetchContactInfoParams) {
   return apiGet<ContactInfoResponse>('/api/customers/contact-info', {
     status: params?.status || undefined,
     search: params?.search || undefined,
+    limit: params?.limit ?? 50,
+    offset: params?.offset ?? 0,
   })
+}
+
+export async function fetchAllContactInfo(
+  params: Omit<FetchContactInfoParams, 'limit' | 'offset'> = {}
+) {
+  const items = await fetchAllPages<DbContactInfo>({
+    pageSize: 200,
+    itemsKey: 'items',
+    fetchPage: ({ limit, offset }) =>
+      fetchContactInfo({ ...params, limit, offset }) as Promise<
+        Record<string, unknown>
+      >,
+  })
+  return { count: items.length, items }
 }
 
 /** Run async work over items with a fixed concurrency limit. */

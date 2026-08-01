@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
-import '../../../core/constants/app_icons.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../data/models/models.dart';
 
@@ -46,37 +45,6 @@ class StatusBadge extends StatelessWidget {
       foregroundColor: color,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
       child: Text(label, style: const TextStyle(fontSize: 11)),
-    );
-  }
-}
-
-class RiskScoreIndicator extends StatelessWidget {
-  const RiskScoreIndicator({super.key, required this.score});
-
-  final int score;
-
-  Color get _color {
-    if (score >= 70) return AppColors.missingRed;
-    if (score >= 40) return AppColors.outstandingOrange;
-    return AppColors.regularGreen;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(AppIcons.warning, size: 14, color: _color),
-        const SizedBox(width: 4),
-        Text(
-          'Risk $score',
-          style: TextStyle(
-            color: _color,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
     );
   }
 }

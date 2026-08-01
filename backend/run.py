@@ -19,4 +19,6 @@ if __name__ == "__main__":
     else:
         from waitress import serve
 
-        serve(app, host="0.0.0.0", port=port, threads=8)
+        threads = max(4, int(os.getenv("WAITRESS_THREADS", "12")))
+        print(f"Serving CRGS API on http://0.0.0.0:{port} (threads={threads})")
+        serve(app, host="0.0.0.0", port=port, threads=threads)

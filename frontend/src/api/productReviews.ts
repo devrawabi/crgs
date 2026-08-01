@@ -1,4 +1,5 @@
 import { apiGet } from './client'
+import { fetchAllPages } from './paginate'
 
 export interface DbProductReview {
   employeeCode: string
@@ -21,6 +22,9 @@ export function productReviewImageSrc(imageUrl?: string | null): string | null {
 
 export interface ProductReviewsResponse {
   count: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   items: DbProductReview[]
 }
 
@@ -28,12 +32,30 @@ export interface FetchProductReviewsParams {
   search?: string
   employeeCode?: string
   route?: string
+  limit?: number
+  offset?: number
 }
 
-export function fetchProductReviews(params?: FetchProductReviewsParams) {
+export function fetchProductReviews(params: FetchProductReviewsParams = {}) {
   return apiGet<ProductReviewsResponse>('/api/product-reviews', {
-    search: params?.search || undefined,
-    employeeCode: params?.employeeCode || undefined,
-    route: params?.route || undefined,
+    search: params.search || undefined,
+    employeeCode: params.employeeCode || undefined,
+    route: params.route || undefined,
+    limit: params.limit ?? 50,
+    offset: params.offset ?? 0,
   })
+}
+
+export async function fetchAllProductReviews(
+  params: Omit<FetchProductReviewsParams, 'limit' | 'offset'> = {}
+) {
+  const items = await fetchAllPages<DbProductReview>({
+    pageSize: 200,
+    itemsKey: 'items',
+    fetchPage: ({ limit, offset }) =>
+      fetchProductReviews({ ...params, limit, offset }) as Promise<
+        Record<string, unknown>
+      >,
+  })
+  return { count: items.length, items }
 }

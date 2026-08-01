@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../core/constants/app_icons.dart';
+import '../../../core/routes/route_names.dart';
 import '../../../core/utils/currency_formatter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/charts/sales_charts.dart';
@@ -19,7 +21,19 @@ class ReportsScreen extends ConsumerWidget {
     final currency = CurrencyFormatter.compact;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Reports & Analytics')),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go(RouteNames.dashboard);
+            }
+          },
+        ),
+        title: const Text('Reports & Analytics'),
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(

@@ -1,6 +1,8 @@
 from flask import Blueprint, current_app, jsonify, request
 
 from app.db import get_connection, oracle_cursor, row_to_dict
+from app.pagination import DEFAULT_MAX_OFFSET, parse_int, parse_limit_offset
+from app.routes.auth import limiter
 from app.services.customer_target_achievement import refresh_new_acquisition_achieved
 
 customers_bp = Blueprint("customers", __name__)
@@ -55,15 +57,33 @@ def _age_join(age_view: str, customer_alias: str = "c") -> str:
     """
     LEFT JOIN the customer age view (last bill) by code.
 
-    TRIM/TO_CHAR avoids dropped matches when CUSTOMERCODE and CUST_CODE differ
-    in type or padding (a common cause of false "never billed" / missing rows).
-    Callers that paginate after the join must collapse duplicate age rows
-    (see age-first query / COUNT DISTINCT in stats).
+    Prefer native equality; keep TRIM(TO_CHAR) fallback for padded/typed codes.
     """
     return (
         f" LEFT JOIN {age_view} av"
-        f" ON TRIM(TO_CHAR(av.CUSTOMERCODE))"
-        f"  = TRIM(TO_CHAR({customer_alias}.CUST_CODE))"
+        f" ON ("
+        f"   av.CUSTOMERCODE = {customer_alias}.CUST_CODE"
+        f"   OR TRIM(TO_CHAR(av.CUSTOMERCODE))"
+        f"    = TRIM(TO_CHAR({customer_alias}.CUST_CODE))"
+        f" )"
+    )
+
+
+def _age_join_stats(age_view: str, customer_alias: str = "c") -> str:
+    """
+    Stats-only join: one age row per customer code so COUNT(*) is safe.
+
+    Collapsing before join removes COUNT(DISTINCT) over large route sets.
+    """
+    return (
+        f" LEFT JOIN ("
+        f"   SELECT"
+        f"     TRIM(TO_CHAR(CUSTOMERCODE)) AS CUSTOMERCODE_NORM,"
+        f"     MAX(BILLDATE) AS BILLDATE"
+        f"   FROM {age_view}"
+        f"   GROUP BY TRIM(TO_CHAR(CUSTOMERCODE))"
+        f" ) av"
+        f" ON av.CUSTOMERCODE_NORM = TRIM(TO_CHAR({customer_alias}.CUST_CODE))"
     )
 
 
@@ -361,6 +381,9 @@ def _fetch_route_stats(
     return by_route.get(str(route).strip(), {"all": 0, "missing": 0, "outstanding": 0})
 
 
+_STATS_ROUTE_CHUNK = 40
+
+
 def _fetch_routes_stats(
     view_name: str,
     age_view: str,
@@ -372,67 +395,69 @@ def _fetch_routes_stats(
     if not cleaned:
         return {}
 
-    params: dict = {"missing_threshold": _missing_threshold(missing_days)}
-    route_binds: list[str] = []
-    for i, route in enumerate(cleaned):
-        key = f"route_{i}"
-        route_binds.append(f":{key}")
-        params[key] = _bind_route(route)
-
-    # Restrict to the requested routes first, then join age — same idea as the
-    # single-route path. COUNT(DISTINCT ...) stays correct with duplicate age keys.
-    query = f"""
-        SELECT
-            TO_CHAR(c.ROUTE) AS route_no,
-            COUNT(DISTINCT c.CUST_CODE) AS total,
-            COUNT(
-                DISTINCT CASE
-                    WHEN {_MISSING_CONDITION} THEN c.CUST_CODE
-                    ELSE NULL
-                END
-            ) AS missing,
-            COUNT(
-                DISTINCT CASE
-                    WHEN (
-                        UPPER(c.CUSTOMERSTATUS) LIKE '%OUT%'
-                        OR NVL(c.CREDIT_AMOUNT, 0) > 0
-                    ) THEN c.CUST_CODE
-                    ELSE NULL
-                END
-            ) AS outstanding
-        FROM (
-            SELECT {_stats_customer_columns_sql("c")}, c.ROUTE
-            FROM {view_name} c
-            WHERE c.ROUTE IN ({", ".join(route_binds)})
-        ) c
-        {_age_join(age_view, "c")}
-        GROUP BY c.ROUTE
-    """
     result: dict[str, dict] = {
         route: {"all": 0, "missing": 0, "outstanding": 0} for route in cleaned
     }
-    with oracle_cursor() as cursor:
-        cursor.execute(query, params)
-        for row in cursor.fetchall():
-            data = row_to_dict(cursor, row)
-            raw_route = data.get("route_no")
-            if raw_route is None:
-                continue
-            # Normalize numeric routes (e.g. "1.0" / "01") to match frontend keys.
-            route_key = str(raw_route).strip()
-            try:
-                route_key = str(int(float(route_key)))
-            except (TypeError, ValueError):
-                pass
-            result[route_key] = {
-                "all": int(data.get("total") or 0),
-                "missing": int(data.get("missing") or 0),
-                "outstanding": int(data.get("outstanding") or 0),
-            }
-            # Also keep the raw cleaned key if it differs (string routes).
-            for original in cleaned:
-                if str(_bind_route(original)) == str(_bind_route(route_key)):
-                    result[original] = result[route_key]
+
+    # Chunk large route lists so Oracle bind/plan stays predictable.
+    for start in range(0, len(cleaned), _STATS_ROUTE_CHUNK):
+        chunk = cleaned[start : start + _STATS_ROUTE_CHUNK]
+        params: dict = {"missing_threshold": _missing_threshold(missing_days)}
+        route_binds: list[str] = []
+        for i, route in enumerate(chunk):
+            key = f"route_{i}"
+            route_binds.append(f":{key}")
+            params[key] = _bind_route(route)
+
+        # Deduped age join (1:1) keeps COUNT DISTINCT cheap — no row explosion.
+        query = f"""
+            SELECT
+                TO_CHAR(c.ROUTE) AS route_no,
+                COUNT(DISTINCT c.CUST_CODE) AS total,
+                COUNT(
+                    DISTINCT CASE
+                        WHEN {_MISSING_CONDITION} THEN c.CUST_CODE
+                        ELSE NULL
+                    END
+                ) AS missing,
+                COUNT(
+                    DISTINCT CASE
+                        WHEN (
+                            UPPER(c.CUSTOMERSTATUS) LIKE '%OUT%'
+                            OR NVL(c.CREDIT_AMOUNT, 0) > 0
+                        ) THEN c.CUST_CODE
+                        ELSE NULL
+                    END
+                ) AS outstanding
+            FROM (
+                SELECT {_stats_customer_columns_sql("c")}, c.ROUTE
+                FROM {view_name} c
+                WHERE c.ROUTE IN ({", ".join(route_binds)})
+            ) c
+            {_age_join_stats(age_view, "c")}
+            GROUP BY c.ROUTE
+        """
+        with oracle_cursor() as cursor:
+            cursor.execute(query, params)
+            for row in cursor.fetchall():
+                data = row_to_dict(cursor, row)
+                raw_route = data.get("route_no")
+                if raw_route is None:
+                    continue
+                route_key = str(raw_route).strip()
+                try:
+                    route_key = str(int(float(route_key)))
+                except (TypeError, ValueError):
+                    pass
+                stats = {
+                    "all": int(data.get("total") or 0),
+                    "missing": int(data.get("missing") or 0),
+                    "outstanding": int(data.get("outstanding") or 0),
+                }
+                result[route_key] = stats
+                for original in chunk:
+                    if str(_bind_route(original)) == str(_bind_route(route_key)):
+                        result[original] = stats
     return result
 
 
@@ -449,7 +474,7 @@ def _fetch_last_purchase_row(billhdr_table: str, cust_code: str) -> dict | None:
             WHERE NVL(DELFLAG, 'N') <> 'Y'
               AND (
                     CUSTOMERCODE = :cust_code
-                    OR TRIM(TO_CHAR(CUSTOMERCODE)) = :cust_code_trim
+                    OR TRIM(CUSTOMERCODE) = :cust_code_trim
                   )
             ORDER BY BILLDATE DESC, BILLNO DESC
         )
@@ -601,11 +626,18 @@ def customer_last_order():
     if not cust_code:
         return jsonify({"error": "cust_code is required"}), 400
 
-    items_limit = min(
-        int(request.args.get("items_limit", BILL_ITEMS_PAGE_SIZE)),
-        MAX_BILL_ITEMS_PAGE_SIZE,
+    items_limit = parse_int(
+        request.args.get("items_limit", BILL_ITEMS_PAGE_SIZE),
+        BILL_ITEMS_PAGE_SIZE,
+        min_value=0,
+        max_value=MAX_BILL_ITEMS_PAGE_SIZE,
     )
-    items_offset = max(int(request.args.get("items_offset", 0)), 0)
+    items_offset = parse_int(
+        request.args.get("items_offset", 0),
+        0,
+        min_value=0,
+        max_value=DEFAULT_MAX_OFFSET,
+    )
 
     billhdr_table = current_app.config["ORACLE_BILLHDR_TABLE"]
     billdtl_table = current_app.config["ORACLE_BILLDTL_TABLE"]
@@ -669,6 +701,7 @@ def customer_last_order():
 
 
 @customers_bp.get("/stats")
+@limiter.limit("60 per minute")
 def customer_stats():
     route = request.args.get("route", "").strip()
     routes_param = request.args.get("routes", "").strip()
@@ -738,11 +771,14 @@ def customer_last_purchase():
 
 @customers_bp.get("/contact-info")
 def list_contact_info():
-    """List prospects created in CRGS_CONTACTINFO (newest first)."""
+    """List prospects created in CRGS_CONTACTINFO (newest first, paginated)."""
+    from app.pagination import apply_has_more, parse_limit_offset, rownum_page_sql
+
     table_name = _contactinfo_table()
     status_filter = str(request.args.get("status", "")).strip()
     flag_filter = str(request.args.get("flag", "")).strip().upper()[:1]
     search = str(request.args.get("search", "")).strip()
+    limit, offset = parse_limit_offset(default_limit=50, max_limit=200)
 
     conditions: list[str] = []
     params: dict = {}
@@ -767,32 +803,27 @@ def list_contact_info():
         params["search"] = f"%{search.upper()}%"
 
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    columns_sql = (
+        "CUSTOMERCODE, CUSTOMERNAME, SHOPNAME, LOCATION, ADDRESS, "
+        "BUSINESSTYPE, EXPECTEDAMOUNT, PRODUCTS, REMARKS, STATUS, "
+        "CONTACTNUMBER, FLAG"
+    )
+    inner_sql = f"""
+        SELECT {columns_sql}
+        FROM {table_name}
+        {where_sql}
+        ORDER BY CUSTOMERCODE DESC
+    """
+    query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
+    params["max_row"] = offset + limit + 1
+    params["min_row"] = offset
 
     with oracle_cursor() as cursor:
-        cursor.execute(
-            f"""
-            SELECT
-                CUSTOMERCODE,
-                CUSTOMERNAME,
-                SHOPNAME,
-                LOCATION,
-                ADDRESS,
-                BUSINESSTYPE,
-                EXPECTEDAMOUNT,
-                PRODUCTS,
-                REMARKS,
-                STATUS,
-                CONTACTNUMBER,
-                FLAG
-            FROM {table_name}
-            {where_sql}
-            ORDER BY CUSTOMERCODE DESC
-            """,
-            params,
-        )
+        cursor.execute(query, params)
+        fetched = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        fetched, has_more = apply_has_more(fetched, limit)
         rows = []
-        for row in cursor.fetchall():
-            item = row_to_dict(cursor, row)
+        for item in fetched:
             rows.append(
                 {
                     "customerCode": str(item.get("customercode") or "").strip(),
@@ -810,7 +841,15 @@ def list_contact_info():
                 }
             )
 
-    return jsonify({"count": len(rows), "items": rows})
+    return jsonify(
+        {
+            "count": len(rows),
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "items": rows,
+        }
+    )
 
 
 @customers_bp.post("/contact-info")
@@ -966,7 +1005,7 @@ def create_contact_info():
             f"""
             SELECT ADDRESS, FLAG
             FROM {table_name}
-            WHERE TRIM(TO_CHAR(CUSTOMERCODE)) = :customercode
+            WHERE TRIM(CUSTOMERCODE) = :customercode
               AND TRIM(FLAG) = :flag
             ORDER BY ROWID DESC
             """,
@@ -1079,6 +1118,7 @@ def update_customer(cust_code: str):
 
 
 @customers_bp.get("")
+@limiter.limit("120 per minute")
 def list_customers():
     view_name = current_app.config["ORACLE_CUSTOMERS_VIEW"]
     age_view = current_app.config["ORACLE_CUSTOMER_AGE_VIEW"]
@@ -1086,9 +1126,19 @@ def list_customers():
     route = request.args.get("route", "").strip()
     search = request.args.get("search", "").strip()
     priority = request.args.get("priority", "").strip()
-    missing_days = max(int(request.args.get("missing_days", default_missing_days)), 0)
-    limit = min(int(request.args.get("limit", DEFAULT_PAGE_SIZE)), MAX_PAGE_SIZE)
-    offset = max(int(request.args.get("offset", 0)), 0)
+    missing_days = parse_int(
+        request.args.get("missing_days", default_missing_days),
+        default_missing_days,
+        min_value=0,
+        max_value=3650,
+    )
+    limit, offset = parse_limit_offset(
+        default_limit=DEFAULT_PAGE_SIZE,
+        max_limit=MAX_PAGE_SIZE,
+        max_offset=DEFAULT_MAX_OFFSET,
+    )
+    # Fetch one extra row so has_more is exact without a COUNT(*) scan.
+    fetch_limit = limit + 1
 
     paginated_query, paginated_params = _build_list_query(
         view_name,
@@ -1098,7 +1148,7 @@ def list_customers():
         priority=priority,
         missing_days=missing_days,
         offset=offset,
-        limit=limit,
+        limit=fetch_limit,
     )
 
     with oracle_cursor() as cursor:
@@ -1114,12 +1164,16 @@ def list_customers():
                 item["days_since_purchase"] = int(item["days_since_purchase"])
             data.append(item)
 
+    has_more = len(data) > limit
+    if has_more:
+        data = data[:limit]
+
     return jsonify(
         {
             "count": len(data),
             "offset": offset,
             "limit": limit,
-            "has_more": len(data) >= limit,
+            "has_more": has_more,
             "missing_days": missing_days,
             "customers": data,
         }
@@ -1130,8 +1184,11 @@ def list_customers():
 def list_bill_items():
     billno = request.args.get("billno", "").strip()
     location = request.args.get("location", "").strip()
-    limit = min(int(request.args.get("limit", BILL_ITEMS_PAGE_SIZE)), MAX_BILL_ITEMS_PAGE_SIZE)
-    offset = max(int(request.args.get("offset", 0)), 0)
+    limit, offset = parse_limit_offset(
+        default_limit=BILL_ITEMS_PAGE_SIZE,
+        max_limit=MAX_BILL_ITEMS_PAGE_SIZE,
+        max_offset=DEFAULT_MAX_OFFSET,
+    )
 
     if not billno:
         return jsonify({"error": "billno is required"}), 400

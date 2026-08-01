@@ -11,22 +11,30 @@ class OrdersState {
   const OrdersState({
     this.orders = const [],
     this.isLoading = false,
+    this.isLoadingMore = false,
+    this.hasMore = false,
     this.error,
   });
 
   final List<CustomerOrder> orders;
   final bool isLoading;
+  final bool isLoadingMore;
+  final bool hasMore;
   final String? error;
 
   OrdersState copyWith({
     List<CustomerOrder>? orders,
     bool? isLoading,
+    bool? isLoadingMore,
+    bool? hasMore,
     String? error,
     bool clearError = false,
   }) =>
       OrdersState(
         orders: orders ?? this.orders,
         isLoading: isLoading ?? this.isLoading,
+        isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+        hasMore: hasMore ?? this.hasMore,
         error: clearError ? null : (error ?? this.error),
       );
 }
@@ -46,13 +54,40 @@ class OrdersNotifier extends StateNotifier<OrdersState> {
   Future<void> load() async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final orders = await _repository.fetchOrders(
+      final page = await _repository.fetchOrdersPage(
         employeeCode: _employeeCode.isEmpty ? null : _employeeCode,
+        offset: 0,
       );
-      state = OrdersState(orders: orders);
+      state = OrdersState(
+        orders: page.orders,
+        hasMore: page.hasMore,
+      );
     } catch (error) {
       state = OrdersState(
         orders: state.orders,
+        hasMore: state.hasMore,
+        error: error.toString(),
+      );
+    }
+  }
+
+  Future<void> loadMore() async {
+    if (state.isLoading || state.isLoadingMore || !state.hasMore) return;
+
+    state = state.copyWith(isLoadingMore: true, clearError: true);
+    try {
+      final page = await _repository.fetchOrdersPage(
+        employeeCode: _employeeCode.isEmpty ? null : _employeeCode,
+        offset: state.orders.length,
+      );
+      state = state.copyWith(
+        orders: [...state.orders, ...page.orders],
+        hasMore: page.hasMore,
+        isLoadingMore: false,
+      );
+    } catch (error) {
+      state = state.copyWith(
+        isLoadingMore: false,
         error: error.toString(),
       );
     }
@@ -122,7 +157,7 @@ class OrdersNotifier extends StateNotifier<OrdersState> {
         headerItemCount: items.length,
       );
 
-      state = OrdersState(orders: [order, ...state.orders]);
+      state = state.copyWith(orders: [order, ...state.orders]);
       return order;
     } finally {
       _isSaving = false;

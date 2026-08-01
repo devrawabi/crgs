@@ -9,17 +9,17 @@ import {
   CUSTOMER_TARGET_LABELS,
   PRODUCT_TARGET_LABELS,
 } from '../../data/mockData'
-import { fetchOrders, type DbOrder } from '../../api/orders'
-import { fetchTasks, type DbTask } from '../../api/tasks'
-import { fetchVisits, type DbVisit } from '../../api/visits'
+import { fetchAllOrders, type DbOrder } from '../../api/orders'
+import { fetchAllTasks, type DbTask } from '../../api/tasks'
+import { fetchAllVisits, type DbVisit } from '../../api/visits'
 import {
-  fetchProductReviews,
+  fetchAllProductReviews,
   type DbProductReview,
 } from '../../api/productReviews'
 import {
-  fetchSalesTargets,
-  fetchProductTargets,
-  fetchCustomerTargets,
+  fetchAllSalesTargets,
+  fetchAllProductTargets,
+  fetchAllCustomerTargets,
   type DbSalesTarget,
   type DbProductTarget,
   type DbCustomerTarget,
@@ -148,34 +148,22 @@ export function ExecutiveDetailReport({
           productRes,
           customerTargetRes,
         ] = await Promise.all([
-          fetchOrders({ employeeCode }),
-          fetchVisits({ employeeCode }),
-          fetchTasks({ employeeCode }),
-          fetchProductReviews({ employeeCode }),
-          fetchSalesTargets(),
-          fetchProductTargets(),
-          fetchCustomerTargets(),
+          fetchAllOrders({ employeeCode }),
+          fetchAllVisits({ employeeCode }),
+          fetchAllTasks({ employeeCode }),
+          fetchAllProductReviews({ employeeCode }),
+          fetchAllSalesTargets({ employeeCode }),
+          fetchAllProductTargets({ employeeCode }),
+          fetchAllCustomerTargets({ employeeCode }),
         ])
 
         setOrders(ordersRes.orders)
         setVisits(visitsRes.visits)
         setTasks(tasksRes.tasks)
         setReviews(reviewsRes.items ?? [])
-        setSalesTargets(
-          (salesRes.targets ?? []).filter((t) =>
-            matchEmployeeCode(t.employeeCode, employeeCode)
-          )
-        )
-        setProductTargets(
-          (productRes.targets ?? []).filter((t) =>
-            matchEmployeeCode(t.employeeCode, employeeCode)
-          )
-        )
-        setCustomerTargets(
-          (customerTargetRes.targets ?? []).filter((t) =>
-            matchEmployeeCode(t.employeeCode, employeeCode)
-          )
-        )
+        setSalesTargets(salesRes.targets ?? [])
+        setProductTargets(productRes.targets ?? [])
+        setCustomerTargets(customerTargetRes.targets ?? [])
       } catch (err) {
         clearDetails()
         setDetailError(

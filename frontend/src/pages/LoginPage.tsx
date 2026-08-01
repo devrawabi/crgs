@@ -5,12 +5,14 @@ import logo from '../assets/crgs-logo.png'
 import { useAuth } from '../context/AuthContext'
 import { FormField, inputClass } from '../components/ui/PageHeader'
 import { Button } from '../components/ui/Button'
+import { defaultPortalPath } from '../lib/roleAccess'
 
 export function LoginPage() {
-  const { login, isAuthenticated, isLoading } = useAuth()
+  const { login, user, isAuthenticated, isLoading } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? '/'
+  const requested =
+    (location.state as { from?: { pathname: string } })?.from?.pathname || ''
 
   const [employeeCode, setEmployeeCode] = useState('')
   const [password, setPassword] = useState('')
@@ -19,7 +21,9 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
 
   if (!isLoading && isAuthenticated) {
-    return <Navigate to={from} replace />
+    const home = defaultPortalPath(user?.roleCode)
+    const dest = requested && requested !== '/' ? requested : home
+    return <Navigate to={dest} replace />
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -31,7 +35,8 @@ export function LoginPage() {
     setSubmitting(false)
 
     if (result.success) {
-      navigate(from, { replace: true })
+      const home = defaultPortalPath(result.roleCode)
+      navigate(requested && requested !== '/' ? requested : home, { replace: true })
     } else {
       setError(result.error ?? 'Login failed')
     }

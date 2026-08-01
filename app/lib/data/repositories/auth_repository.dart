@@ -28,6 +28,16 @@ class AuthRepository {
     return UserModel.fromLoginResponse(data);
   }
 
+  /// Deep session check — validates the current Bearer token with the backend.
+  Future<Map<String, dynamic>> fetchMe() async {
+    final response = await _client.get<Map<String, dynamic>>(ApiEndpoints.me);
+    final data = response.data;
+    if (data == null) {
+      throw ApiException(message: 'Empty response from server');
+    }
+    return data;
+  }
+
   Future<void> completeOnboarding({required String employeeCode}) async {
     await _client.patch<Map<String, dynamic>>(
       ApiEndpoints.onboarding,

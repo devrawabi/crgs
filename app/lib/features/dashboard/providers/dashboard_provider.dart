@@ -3,8 +3,9 @@ import '../../../data/mock/mock_data.dart';
 import '../../../data/models/models.dart';
 import 'targets_provider.dart';
 
+/// Live sales targets only — never fall back to mock KPI percentages.
 final dashboardProvider = Provider<DashboardSummary>((ref) {
-  final base = MockData.dashboardSummary;
+  const empty = DashboardSummary();
   final targetsAsync = ref.watch(executiveTargetsProvider);
 
   return targetsAsync.maybeWhen(
@@ -14,26 +15,17 @@ final dashboardProvider = Provider<DashboardSummary>((ref) {
       final hasDaily = daily != null && daily.target > 0;
       final hasMonthly = monthly != null && monthly.target > 0;
 
-      return base.copyWith(
-        dailySalesTargetPercent:
-            hasDaily ? daily.percent : base.dailySalesTargetPercent,
-        monthlyTargetPercent:
-            hasMonthly ? monthly.percent : base.monthlyTargetPercent,
-        dailyTargetAmount: hasDaily ? daily.target : base.dailyTargetAmount,
-        dailyAchievedAmount:
-            hasDaily ? daily.achieved : base.dailyAchievedAmount,
-        monthlyTargetAmount:
-            hasMonthly ? monthly.target : base.monthlyTargetAmount,
-        monthlyAchievedAmount:
-            hasMonthly ? monthly.achieved : base.monthlyAchievedAmount,
+      return empty.copyWith(
+        dailySalesTargetPercent: hasDaily ? daily.percent : 0,
+        monthlyTargetPercent: hasMonthly ? monthly.percent : 0,
+        dailyTargetAmount: hasDaily ? daily.target : 0,
+        dailyAchievedAmount: hasDaily ? daily.achieved : 0,
+        monthlyTargetAmount: hasMonthly ? monthly.target : 0,
+        monthlyAchievedAmount: hasMonthly ? monthly.achieved : 0,
       );
     },
-    orElse: () => base,
+    orElse: () => empty,
   );
-});
-
-final activitiesProvider = Provider<List<ActivityModel>>((ref) {
-  return MockData.activities;
 });
 
 final notificationsProvider = Provider<List<NotificationModel>>((ref) {

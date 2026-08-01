@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:dio/dio.dart';
 import '../constants/app_constants.dart';
 import 'api_exception.dart';
@@ -5,24 +8,44 @@ import 'api_exception.dart';
 /// Central HTTP client for API integration.
 /// Wire interceptors for auth tokens, logging, and offline queue.
 class ApiClient {
-  ApiClient({Dio? dio}) : _dio = dio ?? _createDio();
+  ApiClient({Dio? dio}) : _dio = dio ?? _createDio() {
+    _dio.interceptors.add(_AuthInterceptor(this));
+  }
 
   final Dio _dio;
   String? _authToken;
   String? get authToken => _authToken;
 
+  FutureOr<void> Function()? _onUnauthorized;
+  bool _handlingUnauthorized = false;
+
+  /// Called once when a protected request returns 401.
+  void setUnauthorizedHandler(FutureOr<void> Function()? handler) {
+    _onUnauthorized = handler;
+  }
+
   static Dio _createDio() {
-    return Dio(
+    final dio = Dio(
       BaseOptions(
         baseUrl: ApiEndpoints.baseUrl,
-        connectTimeout: const Duration(seconds: 45),
+        // Catalog pages can be large over tunnels — keep receive generous.
+        connectTimeout: const Duration(seconds: 20),
         receiveTimeout: const Duration(seconds: 45),
+        sendTimeout: const Duration(seconds: 30),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
       ),
     );
+    dio.interceptors.add(
+      _RetryInterceptor(
+        dio: dio,
+        maxRetries: 3,
+        baseDelay: const Duration(milliseconds: 400),
+      ),
+    );
+    return dio;
   }
 
   void setAuthToken(String? token) {
@@ -31,6 +54,18 @@ class ApiClient {
       _dio.options.headers['Authorization'] = 'Bearer $token';
     } else {
       _dio.options.headers.remove('Authorization');
+    }
+  }
+
+  Future<void> _notifyUnauthorized() async {
+    if (_handlingUnauthorized) return;
+    final handler = _onUnauthorized;
+    if (handler == null) return;
+    _handlingUnauthorized = true;
+    try {
+      await handler();
+    } finally {
+      _handlingUnauthorized = false;
     }
   }
 
@@ -103,12 +138,94 @@ class ApiClient {
       throw ApiException.fromDio(e);
     }
   }
+}
 
-  Future<Response<T>> delete<T>(String path) async {
+/// Forces session teardown on 401 from protected endpoints.
+class _AuthInterceptor extends Interceptor {
+  _AuthInterceptor(this.client);
+
+  final ApiClient client;
+
+  bool _isPublicAuthPath(RequestOptions options) {
+    final path = options.path;
+    return path == ApiEndpoints.login ||
+        path.endsWith(ApiEndpoints.login) ||
+        path.contains('${ApiEndpoints.login}?');
+  }
+
+  @override
+  void onError(DioException err, ErrorInterceptorHandler handler) {
+    final status = err.response?.statusCode;
+    if (status == 401 && !_isPublicAuthPath(err.requestOptions)) {
+      // Clear token immediately so follow-up calls don't keep using it.
+      client.setAuthToken(null);
+      unawaited(client._notifyUnauthorized());
+    }
+    handler.next(err);
+  }
+}
+
+/// Retries transient network / 5xx failures with exponential backoff.
+/// Skips non-idempotent methods and client (4xx) errors.
+class _RetryInterceptor extends Interceptor {
+  _RetryInterceptor({
+    required this.dio,
+    this.maxRetries = 3,
+    this.baseDelay = const Duration(milliseconds: 400),
+  });
+
+  final Dio dio;
+  final int maxRetries;
+  final Duration baseDelay;
+
+  static const _retryableMethods = {'GET', 'HEAD', 'OPTIONS'};
+
+  @override
+  Future<void> onError(
+    DioException err,
+    ErrorInterceptorHandler handler,
+  ) async {
+    final request = err.requestOptions;
+    final attempt = (request.extra['retry_attempt'] as int?) ?? 0;
+    final method = request.method.toUpperCase();
+
+    if (attempt >= maxRetries || !_retryableMethods.contains(method)) {
+      return handler.next(err);
+    }
+    if (!_shouldRetry(err)) {
+      return handler.next(err);
+    }
+
+    final delay = baseDelay * math.pow(2, attempt).toInt();
+    await Future<void>.delayed(delay);
+
+    final options = request.copyWith(
+      extra: {
+        ...request.extra,
+        'retry_attempt': attempt + 1,
+      },
+    );
+
     try {
-      return await _dio.delete<T>(path);
-    } on DioException catch (e) {
-      throw ApiException.fromDio(e);
+      final response = await dio.fetch(options);
+      return handler.resolve(response);
+    } on DioException catch (retryError) {
+      return handler.next(retryError);
+    }
+  }
+
+  bool _shouldRetry(DioException err) {
+    switch (err.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.connectionError:
+        return true;
+      case DioExceptionType.badResponse:
+        final code = err.response?.statusCode ?? 0;
+        return code == 408 || code == 429 || code >= 500;
+      default:
+        return false;
     }
   }
 }

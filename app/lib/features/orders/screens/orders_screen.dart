@@ -5,39 +5,51 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../../core/constants/app_icons.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_decorations.dart';
-import '../../../core/theme/app_theme_extensions.dart';
 import '../../../core/utils/currency_formatter.dart';
 import '../providers/orders_provider.dart';
 
-class OrdersScreen extends ConsumerWidget {
-  const OrdersScreen({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      backgroundColor: RouteMasterColors.background(context),
-      body: const Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(child: OrdersListBody(showHeader: true)),
-        ],
-      ),
-    );
-  }
-}
-
-/// Orders list used by [OrdersScreen] and the Activity tab.
-class OrdersListBody extends ConsumerWidget {
+/// Orders list used by the Activity tab.
+class OrdersListBody extends ConsumerStatefulWidget {
   const OrdersListBody({super.key, this.showHeader = false});
 
   final bool showHeader;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<OrdersListBody> createState() => _OrdersListBodyState();
+}
+
+class _OrdersListBodyState extends ConsumerState<OrdersListBody> {
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 240) {
+      ref.read(ordersProvider.notifier).loadMore();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = ShadTheme.of(context);
     final state = ref.watch(ordersProvider);
     final orders = state.orders;
     final dateFormat = DateFormat('dd MMM yyyy');
+    final showHeader = widget.showHeader;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -67,7 +79,9 @@ class OrdersListBody extends ConsumerWidget {
                       ] else if (orders.isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Text(
-                          '${orders.length} order${orders.length == 1 ? '' : 's'}',
+                          state.hasMore
+                              ? '${orders.length}+ orders'
+                              : '${orders.length} order${orders.length == 1 ? '' : 's'}',
                           style: theme.textTheme.muted.copyWith(fontSize: 13),
                         ),
                       ],
@@ -120,12 +134,28 @@ class OrdersListBody extends ConsumerWidget {
                       onRefresh: () =>
                           ref.read(ordersProvider.notifier).load(),
                       child: ListView.separated(
+                        controller: _scrollController,
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                        itemCount: orders.length,
+                        itemCount:
+                            orders.length + (state.isLoadingMore ? 1 : 0),
                         separatorBuilder: (_, _) =>
                             const SizedBox(height: 12),
                         itemBuilder: (context, index) {
+                          if (index >= orders.length) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Center(
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
                           final order = orders[index];
                           return _OrderCard(
                             order: order,

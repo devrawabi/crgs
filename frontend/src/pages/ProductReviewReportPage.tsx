@@ -6,10 +6,11 @@ import { Modal } from '../components/ui/Modal'
 import { Card } from '../components/ui/Card'
 import { Table } from '../components/ui/Table'
 import {
-  fetchProductReviews,
+  fetchAllProductReviews,
   productReviewImageSrc,
   type DbProductReview,
 } from '../api/productReviews'
+import { AuthenticatedImage } from '../components/common/AuthenticatedImage'
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
@@ -31,7 +32,7 @@ export function ProductReviewReportPage() {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchProductReviews()
+      const data = await fetchAllProductReviews()
       setItems(data.items ?? [])
     } catch (err) {
       setItems([])
@@ -185,7 +186,7 @@ export function ProductReviewReportPage() {
             {productReviewImageSrc(selected.imageUrl) ? (
               <div className="space-y-2">
                 <p className="text-sm font-medium text-gray-500">Photo</p>
-                <img
+                <AuthenticatedImage
                   src={productReviewImageSrc(selected.imageUrl)!}
                   alt="Product review attachment"
                   className="max-h-72 w-full rounded-lg border border-gray-200 object-contain bg-gray-50"

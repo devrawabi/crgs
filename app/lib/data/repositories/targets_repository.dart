@@ -8,69 +8,109 @@ class TargetsRepository {
 
   final ApiClient _client;
 
+  static const int _pageSize = 200;
+  static const int _maxPages = 50;
+
   Future<List<SalesTargetModel>> fetchSalesTargets({
     String? employeeCode,
     TargetPeriod? period,
   }) async {
-    final queryParameters = <String, dynamic>{};
-    if (employeeCode != null && employeeCode.isNotEmpty) {
-      queryParameters['employeeCode'] = employeeCode;
-    }
-    if (period != null) {
-      queryParameters['period'] = period.apiValue;
-    }
-
-    final response = await _client.get<Map<String, dynamic>>(
-      ApiEndpoints.salesTargets,
-      queryParameters: queryParameters.isEmpty ? null : queryParameters,
+    return _fetchAllPages(
+      path: ApiEndpoints.salesTargets,
+      itemsKey: 'targets',
+      fromJson: SalesTargetModel.fromJson,
+      baseQuery: {
+        if (employeeCode != null && employeeCode.isNotEmpty)
+          'employeeCode': employeeCode,
+        if (period != null) 'period': period.apiValue,
+      },
     );
-
-    return _parseList(response.data?['targets'], SalesTargetModel.fromJson);
   }
 
   Future<List<ProductTargetModel>> fetchProductTargets({
     String? employeeCode,
   }) async {
-    final queryParameters = <String, dynamic>{};
-    if (employeeCode != null && employeeCode.isNotEmpty) {
-      queryParameters['employeeCode'] = employeeCode;
-    }
-
-    final response = await _client.get<Map<String, dynamic>>(
-      ApiEndpoints.productTargets,
-      queryParameters: queryParameters.isEmpty ? null : queryParameters,
+    return _fetchAllPages(
+      path: ApiEndpoints.productTargets,
+      itemsKey: 'targets',
+      fromJson: ProductTargetModel.fromJson,
+      baseQuery: {
+        if (employeeCode != null && employeeCode.isNotEmpty)
+          'employeeCode': employeeCode,
+      },
     );
-
-    return _parseList(response.data?['targets'], ProductTargetModel.fromJson);
   }
 
   Future<CustomerTargetsResult> fetchCustomerTargets({
     String? employeeCode,
     TargetPeriod? period,
   }) async {
-    final queryParameters = <String, dynamic>{};
-    if (employeeCode != null && employeeCode.isNotEmpty) {
-      queryParameters['employeeCode'] = employeeCode;
-    }
-    if (period != null) {
-      queryParameters['period'] = period.apiValue;
-    }
-
-    final response = await _client.get<Map<String, dynamic>>(
-      ApiEndpoints.customerTargets,
-      queryParameters: queryParameters.isEmpty ? null : queryParameters,
+    var newCustomersFlagN = 0;
+    final targets = await _fetchAllPages(
+      path: ApiEndpoints.customerTargets,
+      itemsKey: 'targets',
+      fromJson: CustomerTargetModel.fromJson,
+      baseQuery: {
+        if (employeeCode != null && employeeCode.isNotEmpty)
+          'employeeCode': employeeCode,
+        if (period != null) 'period': period.apiValue,
+      },
+      onPage: (data) {
+        final flagNRaw = data['newCustomersFlagN'];
+        if (flagNRaw is num) {
+          newCustomersFlagN = flagNRaw.toInt();
+        } else {
+          newCustomersFlagN =
+              int.tryParse(flagNRaw?.toString() ?? '') ?? newCustomersFlagN;
+        }
+      },
     );
-
-    final data = response.data;
-    final flagNRaw = data?['newCustomersFlagN'];
-    final flagN = flagNRaw is num
-        ? flagNRaw.toInt()
-        : int.tryParse(flagNRaw?.toString() ?? '') ?? 0;
 
     return CustomerTargetsResult(
-      targets: _parseList(data?['targets'], CustomerTargetModel.fromJson),
-      newCustomersFlagN: flagN,
+      targets: targets,
+      newCustomersFlagN: newCustomersFlagN,
     );
+  }
+
+  Future<List<T>> _fetchAllPages<T>({
+    required String path,
+    required String itemsKey,
+    required T Function(Map<String, dynamic> json) fromJson,
+    Map<String, dynamic> baseQuery = const {},
+    void Function(Map<String, dynamic> data)? onPage,
+  }) async {
+    final all = <T>[];
+    var offset = 0;
+
+    for (var page = 0; page < _maxPages; page += 1) {
+      final response = await _client.get<Map<String, dynamic>>(
+        path,
+        queryParameters: {
+          ...baseQuery,
+          'limit': _pageSize,
+          'offset': offset,
+        },
+      );
+
+      final data = response.data;
+      if (data == null) {
+        throw ApiException(message: 'Invalid targets response from server');
+      }
+      onPage?.call(data);
+
+      final batch = _parseList(data[itemsKey], fromJson);
+      all.addAll(batch);
+
+      final hasMore = data['has_more'] == true;
+      if (!hasMore || batch.isEmpty) break;
+
+      final limitUsed = data['limit'] is num
+          ? (data['limit'] as num).toInt()
+          : _pageSize;
+      offset += limitUsed > 0 ? limitUsed : _pageSize;
+    }
+
+    return all;
   }
 
   List<T> _parseList<T>(

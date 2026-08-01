@@ -13,22 +13,30 @@ class TasksState {
   const TasksState({
     this.tasks = const [],
     this.isLoading = false,
+    this.isLoadingMore = false,
+    this.hasMore = false,
     this.error,
   });
 
   final List<TaskModel> tasks;
   final bool isLoading;
+  final bool isLoadingMore;
+  final bool hasMore;
   final String? error;
 
   TasksState copyWith({
     List<TaskModel>? tasks,
     bool? isLoading,
+    bool? isLoadingMore,
+    bool? hasMore,
     String? error,
     bool clearError = false,
   }) =>
       TasksState(
         tasks: tasks ?? this.tasks,
         isLoading: isLoading ?? this.isLoading,
+        isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+        hasMore: hasMore ?? this.hasMore,
         error: clearError ? null : (error ?? this.error),
       );
 }
@@ -45,12 +53,37 @@ class TasksNotifier extends StateNotifier<TasksState> {
   Future<void> load() async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final tasks = await _repository.fetchTasks(
+      final page = await _repository.fetchTasksPage(
         employeeCode: _employeeCode.isEmpty ? null : _employeeCode,
+        offset: 0,
       );
-      state = TasksState(tasks: tasks);
+      state = TasksState(
+        tasks: page.tasks,
+        hasMore: page.hasMore,
+      );
     } catch (error) {
       state = TasksState(error: error.toString());
+    }
+  }
+
+  Future<void> loadMore() async {
+    if (state.isLoading || state.isLoadingMore || !state.hasMore) return;
+    state = state.copyWith(isLoadingMore: true, clearError: true);
+    try {
+      final page = await _repository.fetchTasksPage(
+        employeeCode: _employeeCode.isEmpty ? null : _employeeCode,
+        offset: state.tasks.length,
+      );
+      state = state.copyWith(
+        tasks: [...state.tasks, ...page.tasks],
+        hasMore: page.hasMore,
+        isLoadingMore: false,
+      );
+    } catch (error) {
+      state = state.copyWith(
+        isLoadingMore: false,
+        error: error.toString(),
+      );
     }
   }
 
@@ -78,6 +111,7 @@ class TasksNotifier extends StateNotifier<TasksState> {
     }
 
     final previous = state.tasks;
+    final previousHasMore = state.hasMore;
     state = state.copyWith(
       clearError: true,
       tasks: [
@@ -95,7 +129,11 @@ class TasksNotifier extends StateNotifier<TasksState> {
         status: status,
       );
     } catch (error) {
-      state = TasksState(tasks: previous, error: error.toString());
+      state = TasksState(
+        tasks: previous,
+        hasMore: previousHasMore,
+        error: error.toString(),
+      );
     }
   }
 }
@@ -113,19 +151,9 @@ final followUpsProvider = StateProvider<List<FollowUpModel>>((ref) {
   return MockData.followUps;
 });
 
-final customerFollowUpProgressProvider =
-    Provider<List<CustomerFollowUpProgress>>((ref) {
-  return MockData.customerFollowUpProgress;
-});
-
 final outstandingInvoicesProvider =
     Provider<List<OutstandingInvoice>>((ref) {
   return MockData.outstandingInvoices;
-});
-
-final recommendedProductsProvider =
-    Provider<List<RecommendedProduct>>((ref) {
-  return MockData.recommendedProducts;
 });
 
 final recoveryReasonsProvider = Provider<List<String>>((ref) {

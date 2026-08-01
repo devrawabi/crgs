@@ -3,32 +3,85 @@ import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../features/orders/models/order_models.dart';
 
+/// One page from `GET /api/orders`.
+class OrdersPage {
+  const OrdersPage({
+    required this.orders,
+    required this.offset,
+    required this.limit,
+    required this.hasMore,
+  });
+
+  final List<CustomerOrder> orders;
+  final int offset;
+  final int limit;
+  final bool hasMore;
+}
+
 class OrdersRepository {
   OrdersRepository(this._client);
 
   final ApiClient _client;
 
-  /// Fetches orders from Oracle `CRGS_ORDERHDR` + `CRGS_ORDERDTL`.
-  Future<List<CustomerOrder>> fetchOrders({String? employeeCode}) async {
-    final queryParameters = <String, dynamic>{};
+  static const int pageSize = 50;
+
+  /// Fetches one page of orders from Oracle `CRGS_ORDERHDR` + `CRGS_ORDERDTL`.
+  Future<OrdersPage> fetchOrdersPage({
+    String? employeeCode,
+    int limit = pageSize,
+    int offset = 0,
+  }) async {
+    final queryParameters = <String, dynamic>{
+      'limit': limit,
+      'offset': offset,
+    };
     if (employeeCode != null && employeeCode.isNotEmpty) {
       queryParameters['employeeCode'] = employeeCode;
     }
 
     final response = await _client.get<Map<String, dynamic>>(
       ApiEndpoints.orders,
-      queryParameters: queryParameters.isEmpty ? null : queryParameters,
+      queryParameters: queryParameters,
     );
 
-    final raw = response.data?['orders'];
+    final data = response.data;
+    if (data == null) {
+      throw ApiException(message: 'Empty orders response from server');
+    }
+
+    final raw = data['orders'];
     if (raw is! List) {
       throw ApiException(message: 'Invalid orders response from server');
     }
 
-    return raw
+    final orders = raw
         .whereType<Map>()
         .map((item) => CustomerOrder.fromDb(Map<String, dynamic>.from(item)))
         .toList();
+
+    return OrdersPage(
+      orders: orders,
+      offset: (data['offset'] as num?)?.toInt() ?? offset,
+      limit: (data['limit'] as num?)?.toInt() ?? limit,
+      hasMore: data['has_more'] as bool? ?? orders.length >= limit,
+    );
+  }
+
+  /// Backward-compatible helper — walks pages until exhausted.
+  Future<List<CustomerOrder>> fetchOrders({String? employeeCode}) async {
+    final all = <CustomerOrder>[];
+    var offset = 0;
+    for (var i = 0; i < 100; i++) {
+      final page = await fetchOrdersPage(
+        employeeCode: employeeCode,
+        limit: pageSize,
+        offset: offset,
+      );
+      all.addAll(page.orders);
+      if (!page.hasMore || page.orders.isEmpty) break;
+      offset += page.limit;
+    }
+    return all;
   }
 
   /// Inserts `CRGS_ORDERHDR` + `CRGS_ORDERDTL` (ORDERNO = max + 1).
