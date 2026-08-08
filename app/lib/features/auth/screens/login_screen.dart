@@ -137,6 +137,8 @@ class _LoginHero extends StatelessWidget {
               _heroImage,
               fit: BoxFit.contain,
               alignment: Alignment.topCenter,
+              filterQuality: FilterQuality.medium,
+              cacheWidth: 900,
             ),
             ),
           ),

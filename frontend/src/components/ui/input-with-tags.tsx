@@ -95,7 +95,7 @@ export function InputWithTags({
   const atLimit = limit != null && limit > 0 && tags.length >= limit
 
   const addTag = (value: string) => {
-    const trimmed = value.trim()
+    const trimmed = String(value ?? '').trim()
     if (!trimmed || atLimit || tags.includes(trimmed)) return
     setTags([trimmed, ...tags])
     setInputValue('')
@@ -111,7 +111,7 @@ export function InputWithTags({
   const visibleTags = tagsExpanded ? tags : tags.slice(0, tagsCollapsedLimit)
 
   const filteredSuggestions = suggestions
-    .filter((s) => !tags.includes(s.label))
+    .filter((s) => s.label && !tags.includes(s.label))
     .slice(0, suggestionLimit)
 
   const searchReady = inputValue.trim().length >= minSearchLength
@@ -123,6 +123,7 @@ export function InputWithTags({
       ? null
       : `Type at least ${minSearchLength} character${minSearchLength === 1 ? '' : 's'} to search`
     : null
+  const filteredCount = filteredSuggestions.length
 
   const navigateHighlight = (direction: 1 | -1) => {
     if (atLimit || filteredSuggestions.length === 0) return
@@ -163,7 +164,8 @@ export function InputWithTags({
       if (selectHighlighted()) return
       if (!inputValue.trim()) return
       const match = suggestions.find(
-        (s) => s.label.toLowerCase() === inputValue.trim().toLowerCase()
+        (s) =>
+          String(s.label ?? '').toLowerCase() === inputValue.trim().toLowerCase()
       )
       if (match) {
         addTag(match.label)
@@ -181,14 +183,15 @@ export function InputWithTags({
 
   useEffect(() => {
     if (!onSearch) return
-    if (inputValue.trim().length < minSearchLength) return
+    if (inputValue.trim().length < minSearchLength) {
+      // Clear parent query when below threshold so lists don't stay stale.
+      if (minSearchLength > 0 && inputValue.trim().length === 0) {
+        onSearch('')
+      }
+      return
+    }
     const timer = window.setTimeout(() => onSearch(inputValue.trim()), 250)
     return () => window.clearTimeout(timer)
-  }, [inputValue, minSearchLength, onSearch])
-
-  useEffect(() => {
-    if (!onSearch || minSearchLength !== 0) return
-    onSearch(inputValue.trim())
   }, [inputValue, minSearchLength, onSearch])
 
   useEffect(() => {
@@ -204,15 +207,15 @@ export function InputWithTags({
 
   useEffect(() => {
     if (!canNavigate) {
-      setHighlightedIndex(-1)
+      setHighlightedIndex((prev) => (prev === -1 ? prev : -1))
       return
     }
     setHighlightedIndex((prev) => {
       if (prev < 0) return 0
-      if (prev >= filteredSuggestions.length) return filteredSuggestions.length - 1
+      if (prev >= filteredCount) return filteredCount - 1
       return prev
     })
-  }, [canNavigate, filteredSuggestions])
+  }, [canNavigate, filteredCount])
 
   useEffect(() => {
     if (highlightedIndex < 0 || !listRef.current) return
@@ -334,7 +337,11 @@ export function InputWithTags({
         <div className="flex flex-col gap-2 w-full">
           <div className="grid grid-cols-3 gap-2">
             {visibleTags.map((tag, index) => (
-              <Tag key={tag} text={tag} onRemove={() => removeTag(index)} />
+              <Tag
+                key={`${tag}-${index}`}
+                text={tag}
+                onRemove={() => removeTag(index)}
+              />
             ))}
           </div>
           {hiddenTagCount > 0 && (

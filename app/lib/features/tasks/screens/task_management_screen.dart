@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../../core/constants/app_icons.dart';
 import '../../../core/routes/route_names.dart';
@@ -14,6 +15,7 @@ import '../../../shared/widgets/shad/shad_components.dart';
 import '../../dashboard/providers/targets_provider.dart';
 import '../../tasks/providers/task_provider.dart';
 import '../utils/task_target_progress.dart';
+import '../widgets/work_report_sheet.dart';
 
 enum _TaskTab { all, completed }
 
@@ -39,6 +41,11 @@ class _TaskManagementScreenState extends ConsumerState<TaskManagementScreen> {
 
     return Scaffold(
       backgroundColor: RouteMasterColors.background(context),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => showWorkReportSheet(context),
+        icon: const Icon(AppIcons.report, size: 18),
+        label: const Text('Report Work'),
+      ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -517,28 +524,27 @@ class _TaskCard extends ConsumerWidget {
                       leading: const Icon(AppIcons.check, size: 16),
                       child: const Text('Completed'),
                     ),
+                  )
+                else
+                  Expanded(
+                    child: Text(
+                      'Completed',
+                      style: theme.textTheme.muted.copyWith(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.successGreen,
+                      ),
+                    ),
                   ),
-                if (task.status != TaskStatus.completed)
-                  const SizedBox(width: 8),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  tooltip: _isMarketResearch
-                      ? 'Open research form'
-                      : 'Add notes',
-                  onPressed: () {
-                    if (_isMarketResearch) {
-                      _openMarketResearch(context);
-                      return;
-                    }
-                    _showNotesDialog(context);
-                  },
-                  icon: Icon(
-                    _isMarketResearch
-                        ? AppIcons.calendar
-                        : AppIcons.noteAdd,
-                    size: 18,
+                if (_isMarketResearch) ...[
+                  const SizedBox(width: 4),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Open research form',
+                    onPressed: () => _openMarketResearch(context),
+                    icon: const Icon(AppIcons.calendar, size: 18),
                   ),
-                ),
+                ],
               ],
             ),
           ],
@@ -589,32 +595,6 @@ class _TaskCard extends ConsumerWidget {
     );
   }
 
-  void _showNotesDialog(BuildContext context) {
-    final controller = TextEditingController(text: task.notes);
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Notes'),
-        content: TextField(
-          controller: controller,
-          maxLines: 4,
-          decoration: const InputDecoration(hintText: 'Enter task notes...'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Notes saved')),
-              );
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _TaskTargetProgressCard extends StatelessWidget {

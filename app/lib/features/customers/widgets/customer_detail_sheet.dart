@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/constants/app_icons.dart';
@@ -9,6 +11,7 @@ import '../../../shared/utils/map_launcher.dart';
 import '../../../shared/widgets/badges/priority_badge.dart';
 import '../../../shared/widgets/common/app_widgets.dart';
 import '../../../shared/widgets/maps/location_map_preview.dart';
+import '../providers/customer_provider.dart';
 import 'customer_edit_sheet.dart';
 
 Future<void> showCustomerDetailSheet(
@@ -27,22 +30,51 @@ Future<void> showCustomerDetailSheet(
   );
 }
 
-class _CustomerDetailSheet extends StatefulWidget {
+class _CustomerDetailSheet extends ConsumerStatefulWidget {
   const _CustomerDetailSheet({required this.customer});
 
   final CustomerModel customer;
 
   @override
-  State<_CustomerDetailSheet> createState() => _CustomerDetailSheetState();
+  ConsumerState<_CustomerDetailSheet> createState() =>
+      _CustomerDetailSheetState();
 }
 
-class _CustomerDetailSheetState extends State<_CustomerDetailSheet> {
+class _CustomerDetailSheetState extends ConsumerState<_CustomerDetailSheet> {
   late CustomerModel _customer;
+  bool _loadingLastPurchase = false;
 
   @override
   void initState() {
     super.initState();
     _customer = widget.customer;
+    if (_customer.lastPurchaseDate == null) {
+      _loadingLastPurchase = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadLastPurchase();
+      });
+    }
+  }
+
+  Future<void> _loadLastPurchase() async {
+    try {
+      final purchase = await ref
+          .read(customersRepositoryProvider)
+          .fetchLastPurchase(_customer.id);
+      if (!mounted || purchase == null) return;
+      setState(() {
+        _customer = _customer.copyWith(
+          lastPurchaseDate: purchase.date,
+          lastPurchaseAmount: purchase.amount,
+          lastPurchaseBillNo: purchase.billNo,
+          lastPurchaseLocation: purchase.locationCode,
+        );
+        _loadingLastPurchase = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingLastPurchase = false);
+    }
   }
 
   Future<void> _call(String phone) async {
@@ -59,6 +91,13 @@ class _CustomerDetailSheetState extends State<_CustomerDetailSheet> {
     final updated = await showCustomerEditSheet(context, _customer);
     if (updated == null || !mounted) return;
     setState(() => _customer = updated);
+  }
+
+  String _lastPurchaseValue() {
+    if (_loadingLastPurchase) return 'Loading…';
+    final date = _customer.lastPurchaseDate;
+    if (date == null) return 'N/A';
+    return DateFormat('dd MMM yyyy').format(date);
   }
 
   @override
@@ -147,6 +186,11 @@ class _CustomerDetailSheetState extends State<_CustomerDetailSheet> {
                     label: 'Created Status',
                     value: customer.createdStatus,
                   ),
+                InfoRow(
+                  label: 'Last Purchase Date',
+                  value: _lastPurchaseValue(),
+                  icon: AppIcons.calendar,
+                ),
                 const SizedBox(height: 16),
                 _sectionTitle(theme, 'Credit Information'),
                 InfoRow(

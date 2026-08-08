@@ -100,6 +100,42 @@ export function fetchCustomers(params: FetchCustomersParams) {
   })
 }
 
+/** Load customers for one or more routes (paginated under the hood). */
+export async function fetchAllCustomersForRoutes(
+  routeNos: string[],
+  options?: { maxTotal?: number; pageSize?: number }
+) {
+  const cleaned = [
+    ...new Set(routeNos.map((r) => String(r).trim()).filter(Boolean)),
+  ]
+  if (cleaned.length === 0) return { count: 0, customers: [] as DbCustomer[] }
+
+  const maxTotal = options?.maxTotal
+  const pageSize = options?.pageSize ?? 200
+  const byCode = new Map<string, DbCustomer>()
+
+  for (const route of cleaned) {
+    if (maxTotal != null && byCode.size >= maxTotal) break
+
+    const customers = await fetchAllPages<DbCustomer>({
+      pageSize,
+      maxPages:
+        maxTotal != null
+          ? Math.max(1, Math.ceil((maxTotal - byCode.size) / pageSize) + 1)
+          : 100,
+      itemsKey: 'customers',
+      fetchPage: ({ limit, offset }) =>
+        fetchCustomers({ route, limit, offset }),
+    })
+    for (const customer of customers) {
+      const code = String(customer.cust_code ?? '').trim()
+      if (code) byCode.set(code, customer)
+      if (maxTotal != null && byCode.size >= maxTotal) break
+    }
+  }
+  return { count: byCode.size, customers: [...byCode.values()] }
+}
+
 /** CRGS_CONTACTINFO row — FLAG N = new customer request, FLAG E = edit request */
 export type ContactInfoFlag = 'N' | 'E'
 
@@ -149,9 +185,7 @@ export async function fetchAllContactInfo(
     pageSize: 200,
     itemsKey: 'items',
     fetchPage: ({ limit, offset }) =>
-      fetchContactInfo({ ...params, limit, offset }) as Promise<
-        Record<string, unknown>
-      >,
+      fetchContactInfo({ ...params, limit, offset }),
   })
   return { count: items.length, items }
 }

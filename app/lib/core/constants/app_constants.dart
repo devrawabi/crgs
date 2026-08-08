@@ -28,6 +28,7 @@ abstract final class ApiEndpoints {
   static const String customers = '/customers';
   static const String customerStats = '/customers/stats';
   static const String customerLastOrder = '/customers/last-order';
+  static const String customerLastPurchase = '/customers/last-purchase';
   static const String customerBillItems = '/customers/bill-items';
   static const String customerContactInfo = '/customers/contact-info';
   static String customerByCode(String custCode) =>
@@ -50,6 +51,9 @@ abstract final class ApiEndpoints {
 
   // Market research (CRGS-Admin backend — CRGS_MARKETRESEARCH)
   static const String marketResearch = '/market-research';
+
+  // Additional work reports (CRGS-Admin backend — CRGS_WORKREPORT)
+  static const String workReports = '/work-reports';
 
   // Targets (CRGS-Admin backend)
   static const String salesTargets = '/targets/sales';

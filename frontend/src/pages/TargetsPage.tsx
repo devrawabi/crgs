@@ -9,6 +9,7 @@ import { Table } from '../components/ui/Table'
 import {
   useApp,
   formatCurrency,
+  formatPercent,
 } from '../context/AppContext'
 import {
   PRODUCT_TARGET_LABELS,
@@ -29,9 +30,9 @@ import {
   deleteSalesTarget,
   deleteProductTarget,
   deleteCustomerTarget,
-  fetchAllSalesTargets,
-  fetchAllProductTargets,
-  fetchAllCustomerTargets,
+  fetchSalesTargets,
+  fetchProductTargets,
+  fetchCustomerTargets,
   recalculateSalesTargets,
   type DbSalesTarget,
   type DbProductTarget,
@@ -42,8 +43,15 @@ import { ItemMasterSelect } from '../components/ui/ItemMasterSelect'
 import { ProductTargetCell } from '../components/ui/ProductTargetCell'
 import { AssignedRoutesMultiSelect } from '../components/ui/AssignedRoutesMultiSelect'
 import { RouteTargetCell } from '../components/ui/RouteTargetCell'
+import {
+  LoadMoreButton,
+  TableEmptyRow,
+  TableLoadingRow,
+} from '../components/ui/LoadingState'
 
 type Tab = 'sales' | 'product' | 'customer'
+
+const TARGET_PAGE_SIZE = 50
 
 const initialSalesForm = {
   employeeCode: '',
@@ -72,6 +80,24 @@ const initialCustomerForm = {
   targetAmount: '',
   achievedCount: '0',
   period: 'monthly' as const,
+}
+
+function TargetProgressCell({ achieved, target }: { achieved: number; target: number }) {
+  const pct = formatPercent(achieved, target)
+  const barWidth = Math.min(pct, 100)
+  const color =
+    pct >= 100 ? 'bg-emerald-500' : pct >= 70 ? 'bg-primary-600' : pct >= 40 ? 'bg-amber-500' : 'bg-red-500'
+
+  return (
+    <div className="min-w-[110px]">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-sm font-semibold tabular-nums text-slate-800">{pct}%</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${barWidth}%` }} />
+      </div>
+    </div>
+  )
 }
 
 function salesTargetKey(target: DbSalesTarget) {
@@ -121,6 +147,12 @@ export function TargetsPage() {
   const [salesTargetsLoading, setSalesTargetsLoading] = useState(true)
   const [productTargetsLoading, setProductTargetsLoading] = useState(true)
   const [customerTargetsLoading, setCustomerTargetsLoading] = useState(true)
+  const [salesLoadingMore, setSalesLoadingMore] = useState(false)
+  const [productLoadingMore, setProductLoadingMore] = useState(false)
+  const [customerLoadingMore, setCustomerLoadingMore] = useState(false)
+  const [salesHasMore, setSalesHasMore] = useState(false)
+  const [productHasMore, setProductHasMore] = useState(false)
+  const [customerHasMore, setCustomerHasMore] = useState(false)
   const [salesTargetsError, setSalesTargetsError] = useState<string | null>(null)
   const [productTargetsError, setProductTargetsError] = useState<string | null>(null)
   const [customerTargetsError, setCustomerTargetsError] = useState<string | null>(null)
@@ -162,22 +194,47 @@ export function TargetsPage() {
     setSalesTargetsLoading(true)
     setSalesTargetsError(null)
     try {
-      const data = await fetchAllSalesTargets()
+      const data = await fetchSalesTargets({
+        limit: TARGET_PAGE_SIZE,
+        offset: 0,
+      })
       setDbSalesTargets(data.targets)
+      setSalesHasMore(data.has_more === true)
     } catch (err) {
       setDbSalesTargets([])
+      setSalesHasMore(false)
       setSalesTargetsError(err instanceof Error ? err.message : 'Failed to load sales targets')
     } finally {
       setSalesTargetsLoading(false)
     }
   }, [])
 
+  const loadMoreSalesTargets = useCallback(async () => {
+    if (salesLoadingMore || !salesHasMore) return
+    setSalesLoadingMore(true)
+    setSalesTargetsError(null)
+    try {
+      const data = await fetchSalesTargets({
+        limit: TARGET_PAGE_SIZE,
+        offset: dbSalesTargets.length,
+      })
+      setDbSalesTargets((prev) => [...prev, ...data.targets])
+      setSalesHasMore(data.has_more === true)
+    } catch (err) {
+      setSalesTargetsError(
+        err instanceof Error ? err.message : 'Failed to load more sales targets'
+      )
+    } finally {
+      setSalesLoadingMore(false)
+    }
+  }, [dbSalesTargets.length, salesHasMore, salesLoadingMore])
+
   const handleRecalculateSalesAchieved = useCallback(async () => {
     setRecalculating(true)
     setSalesTargetsError(null)
     try {
-      const data = await recalculateSalesTargets()
-      setDbSalesTargets(data.targets)
+      await recalculateSalesTargets()
+      await loadSalesTargets()
     } catch (err) {
       setSalesTargetsError(
         err instanceof Error ? err.message : 'Failed to sync achieved from orders'
@@ -185,43 +242,98 @@ export function TargetsPage() {
     } finally {
       setRecalculating(false)
     }
-  }, [])
+  }, [loadSalesTargets])
 
   const loadProductTargets = useCallback(async () => {
     setProductTargetsLoading(true)
     setProductTargetsError(null)
     try {
-      const data = await fetchAllProductTargets()
+      const data = await fetchProductTargets({
+        limit: TARGET_PAGE_SIZE,
+        offset: 0,
+      })
       setDbProductTargets(data.targets)
+      setProductHasMore(data.has_more === true)
     } catch (err) {
       setDbProductTargets([])
+      setProductHasMore(false)
       setProductTargetsError(err instanceof Error ? err.message : 'Failed to load product targets')
     } finally {
       setProductTargetsLoading(false)
     }
   }, [])
 
+  const loadMoreProductTargets = useCallback(async () => {
+    if (productLoadingMore || !productHasMore) return
+    setProductLoadingMore(true)
+    setProductTargetsError(null)
+    try {
+      const data = await fetchProductTargets({
+        limit: TARGET_PAGE_SIZE,
+        offset: dbProductTargets.length,
+      })
+      setDbProductTargets((prev) => [...prev, ...data.targets])
+      setProductHasMore(data.has_more === true)
+    } catch (err) {
+      setProductTargetsError(
+        err instanceof Error ? err.message : 'Failed to load more product targets'
+      )
+    } finally {
+      setProductLoadingMore(false)
+    }
+  }, [dbProductTargets.length, productHasMore, productLoadingMore])
+
   const loadCustomerTargets = useCallback(async () => {
     setCustomerTargetsLoading(true)
     setCustomerTargetsError(null)
     try {
-      const data = await fetchAllCustomerTargets({ refreshAchieved: true })
+      const data = await fetchCustomerTargets({
+        limit: TARGET_PAGE_SIZE,
+        offset: 0,
+        refreshAchieved: true,
+      })
       setDbCustomerTargets(data.targets)
+      setCustomerHasMore(data.has_more === true)
     } catch (err) {
       setDbCustomerTargets([])
+      setCustomerHasMore(false)
       setCustomerTargetsError(err instanceof Error ? err.message : 'Failed to load customer targets')
     } finally {
       setCustomerTargetsLoading(false)
     }
   }, [])
 
+  const loadMoreCustomerTargets = useCallback(async () => {
+    if (customerLoadingMore || !customerHasMore) return
+    setCustomerLoadingMore(true)
+    setCustomerTargetsError(null)
+    try {
+      const data = await fetchCustomerTargets({
+        limit: TARGET_PAGE_SIZE,
+        offset: dbCustomerTargets.length,
+      })
+      setDbCustomerTargets((prev) => [...prev, ...data.targets])
+      setCustomerHasMore(data.has_more === true)
+    } catch (err) {
+      setCustomerTargetsError(
+        err instanceof Error ? err.message : 'Failed to load more customer targets'
+      )
+    } finally {
+      setCustomerLoadingMore(false)
+    }
+  }, [customerHasMore, customerLoadingMore, dbCustomerTargets.length])
+
   useEffect(() => {
     loadExecutives()
     loadRoutes()
-    loadSalesTargets()
-    loadProductTargets()
-    loadCustomerTargets()
-  }, [loadExecutives, loadRoutes, loadSalesTargets, loadProductTargets, loadCustomerTargets])
+  }, [loadExecutives, loadRoutes])
+
+  // Load only the active tab's first page (avoids 3 full-table walks on mount).
+  useEffect(() => {
+    if (tab === 'sales') void loadSalesTargets()
+    else if (tab === 'product') void loadProductTargets()
+    else void loadCustomerTargets()
+  }, [tab, loadSalesTargets, loadProductTargets, loadCustomerTargets])
 
   const resolveExecutiveId = useCallback(
     (employeeCode: string) => getUserByEmployeeCode(employeeCode)?.id ?? '',
@@ -505,23 +617,16 @@ export function TargetsPage() {
               { key: 'period', label: 'Period' },
               { key: 'target', label: 'Target' },
               { key: 'achieved', label: 'Achieved' },
+              { key: 'progress', label: 'Progress' },
               { key: 'route', label: 'Route' },
               { key: 'dates', label: 'Due Date' },
               { key: 'actions', label: '' },
             ]}
           >
             {salesTargetsLoading ? (
-              <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                  Loading sales targets...
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={8} label="Loading sales targets..." />
             ) : dbSalesTargets.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                  No sales targets found
-                </td>
-              </tr>
+              <TableEmptyRow colSpan={8} label="No sales targets found" />
             ) : (
               dbSalesTargets.map((t) => {
                 const key = salesTargetKey(t)
@@ -535,6 +640,12 @@ export function TargetsPage() {
                     </td>
                     <td className="px-4 py-3">{formatCurrency(t.targetAmount)}</td>
                     <td className="px-4 py-3">{formatCurrency(t.achievedAmount)}</td>
+                    <td className="px-4 py-3">
+                      <TargetProgressCell
+                        achieved={t.achievedAmount}
+                        target={t.targetAmount}
+                      />
+                    </td>
                     <td className="px-4 py-3 text-gray-600 text-sm">
                       <RouteTargetCell routeNames={getRouteNames(t.routeNo)} />
                     </td>
@@ -557,6 +668,12 @@ export function TargetsPage() {
               })
             )}
           </Table>
+          <LoadMoreButton
+            hasMore={salesHasMore}
+            loading={salesLoadingMore || salesTargetsLoading}
+            onClick={loadMoreSalesTargets}
+            label="Load more sales targets"
+          />
         </Card>
       )}
 
@@ -575,22 +692,15 @@ export function TargetsPage() {
               { key: 'type', label: 'Type' },
               { key: 'target', label: 'Target' },
               { key: 'achieved', label: 'Achieved' },
+              { key: 'progress', label: 'Progress' },
               { key: 'route', label: 'Route' },
               { key: 'actions', label: '' },
             ]}
           >
             {productTargetsLoading ? (
-              <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                  Loading product targets...
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={8} label="Loading product targets..." />
             ) : dbProductTargets.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                  No product targets found
-                </td>
-              </tr>
+              <TableEmptyRow colSpan={8} label="No product targets found" />
             ) : (
               dbProductTargets.map((t) => {
                 const key = productTargetKey(t)
@@ -615,6 +725,12 @@ export function TargetsPage() {
                     </td>
                     <td className="px-4 py-3">{t.targetValue}</td>
                     <td className="px-4 py-3">{t.achievedValue ?? 0}</td>
+                    <td className="px-4 py-3">
+                      <TargetProgressCell
+                        achieved={t.achievedValue ?? 0}
+                        target={t.targetValue}
+                      />
+                    </td>
                     <td className="px-4 py-3 text-gray-600 text-sm">
                       <RouteTargetCell routeNames={display.routeNames} />
                     </td>
@@ -636,6 +752,12 @@ export function TargetsPage() {
               })
             )}
           </Table>
+          <LoadMoreButton
+            hasMore={productHasMore}
+            loading={productLoadingMore || productTargetsLoading}
+            onClick={loadMoreProductTargets}
+            label="Load more product targets"
+          />
         </Card>
       )}
 
@@ -653,6 +775,7 @@ export function TargetsPage() {
               { key: 'type', label: 'Target Type' },
               { key: 'target', label: 'Target' },
               { key: 'achieved', label: 'Achieved' },
+              { key: 'progress', label: 'Progress' },
               { key: 'amount', label: 'Amount' },
               { key: 'route', label: 'Route' },
               { key: 'period', label: 'Period' },
@@ -660,17 +783,9 @@ export function TargetsPage() {
             ]}
           >
             {customerTargetsLoading ? (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                  Loading customer targets...
-                </td>
-              </tr>
+              <TableLoadingRow colSpan={9} label="Loading customer targets..." />
             ) : dbCustomerTargets.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                  No customer targets found
-                </td>
-              </tr>
+              <TableEmptyRow colSpan={9} label="No customer targets found" />
             ) : (
               dbCustomerTargets.map((t) => {
                 const key = customerTargetKey(t)
@@ -687,6 +802,12 @@ export function TargetsPage() {
                     </td>
                     <td className="px-4 py-3">{t.targetCount}</td>
                     <td className="px-4 py-3">{t.achievedCount ?? 0}</td>
+                    <td className="px-4 py-3">
+                      <TargetProgressCell
+                        achieved={t.achievedCount ?? 0}
+                        target={t.targetCount}
+                      />
+                    </td>
                     <td className="px-4 py-3">
                       {formatCurrency(t.targetAmount || 0)}
                     </td>
@@ -712,6 +833,12 @@ export function TargetsPage() {
               })
             )}
           </Table>
+          <LoadMoreButton
+            hasMore={customerHasMore}
+            loading={customerLoadingMore || customerTargetsLoading}
+            onClick={loadMoreCustomerTargets}
+            label="Load more customer targets"
+          />
         </Card>
       )}
 

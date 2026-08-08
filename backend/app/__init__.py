@@ -25,6 +25,7 @@ from app.routes.visits import visits_bp
 from app.routes.orders import orders_bp
 from app.routes.product_reviews import product_reviews_bp
 from app.routes.market_research import market_research_bp
+from app.routes.work_reports import work_reports_bp
 from app.security import is_public_request, load_current_user_from_token
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,7 @@ def create_app(config_class=Config):
     app.register_blueprint(orders_bp, url_prefix="/api/orders")
     app.register_blueprint(product_reviews_bp, url_prefix="/api/product-reviews")
     app.register_blueprint(market_research_bp, url_prefix="/api/market-research")
+    app.register_blueprint(work_reports_bp, url_prefix="/api/work-reports")
 
     @app.errorhandler(oracledb.Error)
     def handle_oracle_error(error):

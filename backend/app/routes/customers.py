@@ -1,5 +1,6 @@
 from flask import Blueprint, current_app, jsonify, request
 
+from app.cache import cache_get, cache_set
 from app.db import get_connection, oracle_cursor, row_to_dict
 from app.pagination import DEFAULT_MAX_OFFSET, parse_int, parse_limit_offset
 from app.routes.auth import limiter
@@ -57,33 +58,38 @@ def _age_join(age_view: str, customer_alias: str = "c") -> str:
     """
     LEFT JOIN the customer age view (last bill) by code.
 
-    Prefer native equality; keep TRIM(TO_CHAR) fallback for padded/typed codes.
+    Native equality only — OR TRIM(TO_CHAR(...)) blocks indexes and forces
+    full scans on Missing list / stats. Codes must match CUST_CODE type.
     """
     return (
         f" LEFT JOIN {age_view} av"
-        f" ON ("
-        f"   av.CUSTOMERCODE = {customer_alias}.CUST_CODE"
-        f"   OR TRIM(TO_CHAR(av.CUSTOMERCODE))"
-        f"    = TRIM(TO_CHAR({customer_alias}.CUST_CODE))"
-        f" )"
+        f" ON av.CUSTOMERCODE = {customer_alias}.CUST_CODE"
     )
 
 
-def _age_join_stats(age_view: str, customer_alias: str = "c") -> str:
+def _age_join_stats(
+    view_name: str,
+    age_view: str,
+    customer_alias: str,
+    route_binds: list[str],
+) -> str:
     """
-    Stats-only join: one age row per customer code so COUNT(*) is safe.
+    Stats-only join: aggregate age rows for the requested routes only.
 
-    Collapsing before join removes COUNT(DISTINCT) over large route sets.
+    Avoids GROUP BY over the entire CUSTOMERAGEVIEW on every Reports load.
     """
+    route_in = ", ".join(route_binds)
     return (
         f" LEFT JOIN ("
-        f"   SELECT"
-        f"     TRIM(TO_CHAR(CUSTOMERCODE)) AS CUSTOMERCODE_NORM,"
-        f"     MAX(BILLDATE) AS BILLDATE"
-        f"   FROM {age_view}"
-        f"   GROUP BY TRIM(TO_CHAR(CUSTOMERCODE))"
+        f"   SELECT a.CUSTOMERCODE, MAX(a.BILLDATE) AS BILLDATE"
+        f"   FROM {age_view} a"
+        f"   WHERE a.CUSTOMERCODE IN ("
+        f"     SELECT cx.CUST_CODE FROM {view_name} cx"
+        f"     WHERE cx.ROUTE IN ({route_in})"
+        f"   )"
+        f"   GROUP BY a.CUSTOMERCODE"
         f" ) av"
-        f" ON av.CUSTOMERCODE_NORM = TRIM(TO_CHAR({customer_alias}.CUST_CODE))"
+        f" ON av.CUSTOMERCODE = {customer_alias}.CUST_CODE"
     )
 
 
@@ -93,6 +99,22 @@ def _bind_route(route: str):
         return int(route)
     except ValueError:
         return route
+
+
+def _bind_cust_code(code: str):
+    """Strip only — keep string so padded/alphanumeric CUST_CODE values still match."""
+    return str(code or "").strip()
+
+
+def _bind_maybe_number(value: str):
+    """Bind digits as int so BILLNO / LOCATIONCODE NUMBER indexes stay usable."""
+    text = str(value or "").strip()
+    if not text:
+        return text
+    try:
+        return int(text)
+    except ValueError:
+        return text
 
 
 def _contactinfo_table() -> str:
@@ -168,11 +190,18 @@ def _build_customer_filters(
     search: str,
     priority: str,
     customer_alias: str = "c",
+    codes: list[str] | None = None,
 ) -> tuple[list[str], dict]:
     conditions = []
     params: dict = {}
 
-    if route:
+    if codes:
+        # Native equality only — TRIM(TO_CHAR(...)) blocks CUST_CODE indexes.
+        binds = {f"code{i}": _bind_cust_code(code) for i, code in enumerate(codes)}
+        in_clause = ", ".join(f":code{i}" for i in range(len(codes)))
+        conditions.append(f"{customer_alias}.CUST_CODE IN ({in_clause})")
+        params.update(binds)
+    elif route:
         # Equality — not TRIM(TO_CHAR(...)) — so a ROUTE index can be used.
         conditions.append(f"{customer_alias}.ROUTE = :route")
         params["route"] = _bind_route(route)
@@ -374,6 +403,55 @@ def _build_list_query(
     )
 
 
+def _build_global_search_query(
+    view_name: str,
+    *,
+    search: str,
+    offset: int,
+    limit: int,
+) -> tuple[str, dict]:
+    """
+    Call-center / unscoped typeahead: no full-table ORDER BY.
+
+    Leading-wildcard name match still scans, but ROWNUM stopkey avoids
+    sorting the entire CUSTOMERS master before returning a small page.
+    Code uses prefix match (index-friendly when CUST_CODE is text-like).
+    """
+    upper = search.strip().upper()
+    params = {
+        "search_code": f"{upper}%",
+        "search_name": f"%{upper}%",
+        "max_row": offset + limit,
+        "min_row": offset,
+    }
+    query = f"""
+        SELECT {_customer_columns_sql("paged")},
+               NULL AS LAST_PURCHASE_DATE,
+               NULL AS LAST_PURCHASE_AMOUNT,
+               NULL AS LAST_PURCHASE_BILLNO,
+               NULL AS LAST_PURCHASE_LOCATION,
+               NULL AS DAYS_SINCE_PURCHASE,
+               0 AS IS_MISSING
+        FROM (
+            SELECT {_customer_columns_sql("ranked")},
+                   ranked.rnum
+            FROM (
+                SELECT inner_query.*, ROWNUM AS rnum
+                FROM (
+                    SELECT {_customer_columns_sql("c")}
+                    FROM {view_name} c
+                    WHERE UPPER(c.CUST_CODE) LIKE :search_code
+                       OR UPPER(c.CUST_NAME) LIKE :search_name
+                ) inner_query
+                WHERE ROWNUM <= :max_row
+            ) ranked
+            WHERE ranked.rnum > :min_row
+        ) paged
+        ORDER BY paged.CUST_NAME
+    """
+    return query, params
+
+
 def _fetch_route_stats(
     view_name: str, age_view: str, route: str, missing_days: int
 ) -> dict:
@@ -382,6 +460,9 @@ def _fetch_route_stats(
 
 
 _STATS_ROUTE_CHUNK = 40
+# Longer TTL — route stats hit CUSTOMERAGEVIEW; Reports remounts often.
+_STATS_CACHE_TTL_SECONDS = 300
+_GLOBAL_SEARCH_MIN_CHARS = 2
 
 
 def _fetch_routes_stats(
@@ -394,6 +475,14 @@ def _fetch_routes_stats(
     cleaned = [str(r).strip() for r in routes if str(r).strip()]
     if not cleaned:
         return {}
+
+    cache_key = (
+        f"customer_stats:{view_name}:{age_view}:{missing_days}:"
+        + ",".join(sorted(cleaned))
+    )
+    cached = cache_get(cache_key)
+    if isinstance(cached, dict):
+        return cached
 
     result: dict[str, dict] = {
         route: {"all": 0, "missing": 0, "outstanding": 0} for route in cleaned
@@ -409,7 +498,7 @@ def _fetch_routes_stats(
             route_binds.append(f":{key}")
             params[key] = _bind_route(route)
 
-        # Deduped age join (1:1) keeps COUNT DISTINCT cheap — no row explosion.
+        # Route-scoped age join + equality keeps COUNT DISTINCT cheap.
         query = f"""
             SELECT
                 TO_CHAR(c.ROUTE) AS route_no,
@@ -434,7 +523,7 @@ def _fetch_routes_stats(
                 FROM {view_name} c
                 WHERE c.ROUTE IN ({", ".join(route_binds)})
             ) c
-            {_age_join_stats(age_view, "c")}
+            {_age_join_stats(view_name, age_view, "c", route_binds)}
             GROUP BY c.ROUTE
         """
         with oracle_cursor() as cursor:
@@ -458,38 +547,48 @@ def _fetch_routes_stats(
                 for original in chunk:
                     if str(_bind_route(original)) == str(_bind_route(route_key)):
                         result[original] = stats
+
+    cache_set(cache_key, result, ttl_seconds=_STATS_CACHE_TTL_SECONDS)
     return result
 
 
 def _fetch_last_purchase_row(billhdr_table: str, cust_code: str) -> dict | None:
-    # Prefer direct equality; fall back to TRIM/TO_CHAR for padded/typed codes.
-    query = f"""
-        SELECT BILLNO, LOCATIONCODE, BILLDATE, NETBILLAMOUNT
-        FROM (
-            SELECT BILLNO,
-                   LOCATIONCODE,
-                   BILLDATE,
-                   NETBILLAMOUNT
-            FROM {billhdr_table}
-            WHERE NVL(DELFLAG, 'N') <> 'Y'
-              AND (
-                    CUSTOMERCODE = :cust_code
-                    OR TRIM(CUSTOMERCODE) = :cust_code_trim
-                  )
-            ORDER BY BILLDATE DESC, BILLNO DESC
-        )
-        WHERE ROWNUM = 1
+    """
+    Latest bill for a customer. Equality-only first so IDX_BILLHDR_CUST_DATE
+    can be used; TRIM fallback only if the padded/legacy code misses.
     """
     cust_code = cust_code.strip()
-    with oracle_cursor() as cursor:
-        cursor.execute(
-            query,
-            {"cust_code": cust_code, "cust_code_trim": cust_code},
-        )
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return row_to_dict(cursor, row)
+    if not cust_code:
+        return None
+
+    def _run(where_sql: str, binds: dict) -> dict | None:
+        query = f"""
+            SELECT BILLNO, LOCATIONCODE, BILLDATE, NETBILLAMOUNT
+            FROM (
+                SELECT BILLNO,
+                       LOCATIONCODE,
+                       BILLDATE,
+                       NETBILLAMOUNT
+                FROM {billhdr_table}
+                WHERE NVL(DELFLAG, 'N') <> 'Y'
+                  AND {where_sql}
+                ORDER BY BILLDATE DESC, BILLNO DESC
+            )
+            WHERE ROWNUM = 1
+        """
+        with oracle_cursor() as cursor:
+            cursor.execute(query, binds)
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return row_to_dict(cursor, row)
+
+    bound = _bind_cust_code(cust_code)
+    found = _run("CUSTOMERCODE = :cust_code", {"cust_code": bound})
+    if found is not None:
+        return found
+    # Rare legacy padded codes — avoid OR TRIM on the hot path.
+    return _run("TRIM(CUSTOMERCODE) = :cust_code", {"cust_code": cust_code})
 
 
 def _normalize_bill_item_row(item: dict) -> dict:
@@ -507,12 +606,12 @@ def _fetch_item_names(itemmaster_table: str, item_codes: list[str]) -> dict[str,
     if not unique:
         return {}
 
-    binds = {f"c{i}": code for i, code in enumerate(unique)}
+    binds = {f"c{i}": _bind_cust_code(code) for i, code in enumerate(unique)}
     in_clause = ", ".join(f":c{i}" for i in range(len(unique)))
     query = f"""
         SELECT ITEMCODE, ITEMNAME
         FROM {itemmaster_table}
-        WHERE TO_CHAR(ITEMCODE) IN ({in_clause})
+        WHERE ITEMCODE IN ({in_clause})
     """
 
     names: dict[str, str] = {}
@@ -571,13 +670,13 @@ def _fetch_bill_items_fast(
                d.RATE,
                d.UNITOFMEASUREMENT
         FROM {billdtl_table} d
-        WHERE TO_CHAR(d.BILLNO) = :billno
+        WHERE d.BILLNO = :billno
     """
-    params: dict = {"billno": billno}
+    params: dict = {"billno": _bind_maybe_number(billno)}
 
     if location:
-        query += " AND TO_CHAR(d.LOCATIONCODE) = :location"
-        params["location"] = location
+        query += " AND d.LOCATIONCODE = :location"
+        params["location"] = _bind_maybe_number(location)
 
     query += " ORDER BY d.SLNO"
 
@@ -1126,6 +1225,7 @@ def list_customers():
     route = request.args.get("route", "").strip()
     search = request.args.get("search", "").strip()
     priority = request.args.get("priority", "").strip()
+    codes_param = request.args.get("codes", "").strip()
     missing_days = parse_int(
         request.args.get("missing_days", default_missing_days),
         default_missing_days,
@@ -1137,19 +1237,88 @@ def list_customers():
         max_limit=MAX_PAGE_SIZE,
         max_offset=DEFAULT_MAX_OFFSET,
     )
+
+    codes = [
+        part.strip()
+        for part in codes_param.replace(";", ",").split(",")
+        if part.strip()
+    ]
+    # Cap IN-list size for Oracle bind safety.
+    codes = codes[:100]
+
+    # Unscoped list / priority without a route scans the live CUSTOMERS master.
+    if not codes and not route:
+        if priority:
+            return jsonify(
+                {"error": "route is required when using priority filters"}
+            ), 400
+        if len(search) < _GLOBAL_SEARCH_MIN_CHARS:
+            return jsonify(
+                {
+                    "error": (
+                        "route, codes, or search "
+                        f"(min {_GLOBAL_SEARCH_MIN_CHARS} characters) is required"
+                    )
+                }
+            ), 400
+
     # Fetch one extra row so has_more is exact without a COUNT(*) scan.
     fetch_limit = limit + 1
 
-    paginated_query, paginated_params = _build_list_query(
-        view_name,
-        age_view,
-        route=route,
-        search=search,
-        priority=priority,
-        missing_days=missing_days,
-        offset=offset,
-        limit=fetch_limit,
-    )
+    if codes:
+        conditions, params = _build_customer_filters(
+            route="",
+            search=search,
+            priority="",
+            codes=codes,
+        )
+        params["max_row"] = offset + fetch_limit
+        params["min_row"] = offset
+        where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        paginated_query = f"""
+            SELECT {_customer_columns_sql("paged")},
+                   NULL AS LAST_PURCHASE_DATE,
+                   NULL AS LAST_PURCHASE_AMOUNT,
+                   NULL AS LAST_PURCHASE_BILLNO,
+                   NULL AS LAST_PURCHASE_LOCATION,
+                   NULL AS DAYS_SINCE_PURCHASE,
+                   0 AS IS_MISSING
+            FROM (
+                SELECT {_customer_columns_sql("ranked")},
+                       ranked.rnum
+                FROM (
+                    SELECT inner_query.*, ROWNUM AS rnum
+                    FROM (
+                        SELECT {_customer_columns_sql("c")}
+                        FROM {view_name} c
+                        {where_sql}
+                        ORDER BY c.CUST_NAME
+                    ) inner_query
+                    WHERE ROWNUM <= :max_row
+                ) ranked
+                WHERE ranked.rnum > :min_row
+            ) paged
+            ORDER BY paged.rnum
+        """
+        paginated_params = params
+    elif not route and search:
+        paginated_query, paginated_params = _build_global_search_query(
+            view_name,
+            search=search,
+            offset=offset,
+            limit=fetch_limit,
+        )
+    else:
+        paginated_query, paginated_params = _build_list_query(
+            view_name,
+            age_view,
+            route=route,
+            search=search,
+            priority=priority,
+            missing_days=missing_days,
+            offset=offset,
+            limit=fetch_limit,
+        )
 
     with oracle_cursor() as cursor:
         cursor.execute(paginated_query, paginated_params)

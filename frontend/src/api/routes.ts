@@ -41,7 +41,7 @@ export async function fetchAllRoutes(
     pageSize: 500,
     itemsKey: 'routes',
     fetchPage: ({ limit, offset }) =>
-      fetchRoutes({ ...params, limit, offset }) as Promise<Record<string, unknown>>,
+      fetchRoutes({ ...params, limit, offset }),
   })
   return { count: routes.length, offset: 0, limit: routes.length, routes }
 }

@@ -17,6 +17,7 @@ export type TaskType =
   | 'own_products'
   | 'market_research'
   | 'other'
+  | 'other_route'
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'overdue'
 
 export interface User {

@@ -75,4 +75,31 @@ export default defineConfig({
   },
   server: sharedServer,
   preview: sharedServer,
+  build: {
+    target: 'es2022',
+    cssCodeSplit: true,
+    sourcemap: false,
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('recharts')) return 'charts'
+          if (
+            id.includes('jspdf') ||
+            id.includes('xlsx')
+          ) {
+            return 'export'
+          }
+          if (
+            id.includes('react-dom') ||
+            id.includes('react-router') ||
+            id.includes('/react/')
+          ) {
+            return 'vendor'
+          }
+        },
+      },
+    },
+  },
 })

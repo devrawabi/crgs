@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -186,6 +186,7 @@ def list_orders():
     Query params:
       - employeeCode, limit (default 50, max 200), offset
       - includeDetails: true|false (default true). false skips detail/ITEMNAME join.
+      - dateFrom / dateTo: YYYY-MM-DD (admin unscoped lists default to last 90 days)
     """
     hdr_table = _hdr_table()
     dtl_table = _dtl_table()
@@ -205,11 +206,26 @@ def list_orders():
         max_limit=_MAX_LIMIT,
     )
 
+    date_from = _parse_iso_date(request.args.get("dateFrom", ""))
+    date_to = _parse_iso_date(request.args.get("dateTo", ""))
+    # Admin "all employees" without a date window walks the full order history.
+    if not employee_code and date_from is None and date_to is None:
+        date_from = datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=90)
+
     conditions: list[str] = []
     params: dict = {}
     if employee_code:
         conditions.append("TRIM(EMPLOYEECODE) = :employeecode")
         params["employeecode"] = employee_code
+    if date_from is not None:
+        conditions.append("ORDERDATE >= :date_from")
+        params["date_from"] = date_from
+    if date_to is not None:
+        conditions.append("ORDERDATE < :date_to")
+        # Inclusive end date → next day exclusive bound (avoids TRUNC on column).
+        params["date_to"] = date_to + timedelta(days=1)
 
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -279,6 +295,7 @@ def list_orders():
         in_binds = {f"ono_{i}": ono for i, ono in enumerate(order_nos)}
         in_sql = ", ".join(f":{key}" for key in in_binds)
 
+        # Equality-only ITEMMASTER join — OR TRIM(TO_CHAR(...)) disables indexes.
         cursor.execute(
             f"""
             SELECT
@@ -302,10 +319,7 @@ def list_orders():
             LEFT JOIN {dtl_table} d
                 ON h.ORDERNO = d.ORDERNO
             LEFT JOIN {item_table} i
-                ON (
-                    d.ITEMCODE = i.ITEMCODE
-                    OR TRIM(TO_CHAR(d.ITEMCODE)) = TRIM(TO_CHAR(i.ITEMCODE))
-                )
+                ON d.ITEMCODE = i.ITEMCODE
             WHERE h.ORDERNO IN ({in_sql})
             ORDER BY h.ORDERDATE DESC,
                      TO_NUMBER(REGEXP_SUBSTR(TRIM(h.ORDERNO), '^[0-9]+')) DESC NULLS LAST,
@@ -345,9 +359,9 @@ def _lookup_retail_prices(cursor, item_codes: list[str]) -> dict[str, float]:
         in_sql = ", ".join(f":{key}" for key in binds)
         cursor.execute(
             f"""
-            SELECT TRIM(TO_CHAR(ITEMCODE)), NVL(RETAILPRICE, 0)
+            SELECT ITEMCODE, NVL(RETAILPRICE, 0)
             FROM {item_table}
-            WHERE TRIM(TO_CHAR(ITEMCODE)) IN ({in_sql})
+            WHERE ITEMCODE IN ({in_sql})
             """,
             binds,
         )

@@ -57,11 +57,19 @@ export function fetchOrders(params: FetchOrdersParams = {}) {
 export async function fetchAllOrders(
   params: Omit<FetchOrdersParams, 'limit' | 'offset'> = {}
 ) {
+  // Default headers-only: skips ORDERDTL + ITEMMASTER join (major live load cut).
+  const includeDetails = params.includeDetails === true
   const orders = await fetchAllPages<DbOrder>({
     pageSize: 200,
+    maxPages: includeDetails ? 20 : 40,
     itemsKey: 'orders',
     fetchPage: ({ limit, offset }) =>
-      fetchOrders({ ...params, limit, offset }) as Promise<Record<string, unknown>>,
+      fetchOrders({
+        ...params,
+        includeDetails,
+        limit,
+        offset,
+      }),
   })
   return { count: orders.length, orders }
 }

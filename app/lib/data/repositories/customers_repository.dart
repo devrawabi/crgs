@@ -191,6 +191,64 @@ class CustomersRepository {
     );
   }
 
+  /// Load customers by exact codes (Other-route assigned customers).
+  Future<CustomersPageResult> fetchCustomersByCodes({
+    required List<String> codes,
+    int offset = 0,
+    int limit = 100,
+    String search = '',
+  }) async {
+    final cleaned = [
+      ...{
+        for (final code in codes)
+          if (code.trim().isNotEmpty) code.trim(),
+      },
+    ];
+    if (cleaned.isEmpty) {
+      return CustomersPageResult(
+        customers: const [],
+        offset: 0,
+        limit: limit,
+        hasMore: false,
+      );
+    }
+
+    final queryParameters = <String, dynamic>{
+      'codes': cleaned.join(','),
+      'offset': offset,
+      'limit': limit,
+    };
+    if (search.isNotEmpty) {
+      queryParameters['search'] = search;
+    }
+
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.customers,
+      queryParameters: queryParameters,
+    );
+
+    final data = response.data;
+    if (data == null) {
+      throw ApiException(message: 'Empty response from server');
+    }
+
+    final customersJson = data['customers'];
+    final customers = customersJson is List
+        ? customersJson
+            .whereType<Map>()
+            .map((item) => CustomerModel.fromDb(Map<String, dynamic>.from(item)))
+            .where((customer) => customer.id.isNotEmpty)
+            .toList()
+        : <CustomerModel>[];
+
+    return CustomersPageResult(
+      customers: customers,
+      offset: (data['offset'] as num?)?.toInt() ?? offset,
+      limit: (data['limit'] as num?)?.toInt() ?? limit,
+      hasMore: data['has_more'] as bool? ?? customers.length >= limit,
+    );
+  }
+
   Future<CustomerRouteStats> fetchRouteStats({
     required String route,
     int? missingDays,
@@ -216,6 +274,29 @@ class CustomersRepository {
     return CustomerRouteStats.fromJson(
       data['stats'] is Map ? Map<String, dynamic>.from(data['stats'] as Map) : null,
     );
+  }
+
+  /// Lightweight last-bill lookup (no line items). Used by the customer sheet
+  /// because the All/Outstanding list omits last-purchase for speed.
+  Future<LastPurchaseInfo?> fetchLastPurchase(String custCode) async {
+    final code = custCode.trim();
+    if (code.isEmpty) return null;
+
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.customerLastPurchase,
+      queryParameters: {'cust_code': code},
+    );
+
+    final data = response.data;
+    if (data == null) {
+      throw ApiException(message: 'Empty response from server');
+    }
+
+    final raw = data['last_purchase'];
+    if (raw is! Map) return null;
+    final info = LastPurchaseInfo.fromJson(Map<String, dynamic>.from(raw));
+    if (info.date == null && info.billNo.isEmpty) return null;
+    return info;
   }
 
   Future<LastOrderPageResult> fetchLastOrderPage({

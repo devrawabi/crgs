@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify
 
+from app.cache import cache_get, cache_set
 from app.db import oracle_cursor, row_to_dict
 from app.pagination import rownum_page_sql
 from app.routes.auth import limiter
@@ -13,6 +14,8 @@ dashboard_bp = Blueprint("dashboard", __name__)
 
 _PERIOD_MONTHLY = "M"
 _ACTIVE_FLAG = "A"
+_SUMMARY_CACHE_KEY = "dashboard:summary"
+_SUMMARY_CACHE_TTL_SECONDS = 180
 
 
 def _username_display(username: str) -> str:
@@ -43,6 +46,10 @@ def dashboard_summary():
 
     Replaces admin multi-fetch of full users/tasks/targets tables.
     """
+    cached = cache_get(_SUMMARY_CACHE_KEY)
+    if cached is not None:
+        return jsonify(cached)
+
     users_table = current_app.config["ORACLE_LOGIN_USERS_TABLE"]
     sales_table = current_app.config["ORACLE_SALE_TARGETS_TABLE"]
     product_table = current_app.config["ORACLE_PRODUCT_TARGETS_TABLE"]
@@ -239,30 +246,30 @@ def dashboard_summary():
             }
         )
 
-    return jsonify(
-        {
-            "activeExecutives": len(executives),
-            "assignedRoutes": len(assigned_routes),
-            "sales": {
-                "period": "monthly",
-                "targetTotal": float(sales_totals.get("target_total") or 0),
-                "achievedTotal": float(sales_totals.get("achieved_total") or 0),
-                "byExecutive": exec_performance,
-                "byRoute": sales_by_route,
-            },
-            "products": {
-                "targetTotal": float(product_totals.get("target_total") or 0),
-                "achievedTotal": float(product_totals.get("achieved_total") or 0),
-            },
-            "customers": {
-                "targetTotal": float(customer_totals.get("target_total") or 0),
-                "achievedTotal": float(customer_totals.get("achieved_total") or 0),
-            },
-            "tasks": {
-                "total": task_total,
-                "overdue": overdue_count,
-                "breakdown": task_breakdown,
-                "recent": recent_tasks,
-            },
-        }
-    )
+    payload = {
+        "activeExecutives": len(executives),
+        "assignedRoutes": len(assigned_routes),
+        "sales": {
+            "period": "monthly",
+            "targetTotal": float(sales_totals.get("target_total") or 0),
+            "achievedTotal": float(sales_totals.get("achieved_total") or 0),
+            "byExecutive": exec_performance,
+            "byRoute": sales_by_route,
+        },
+        "products": {
+            "targetTotal": float(product_totals.get("target_total") or 0),
+            "achievedTotal": float(product_totals.get("achieved_total") or 0),
+        },
+        "customers": {
+            "targetTotal": float(customer_totals.get("target_total") or 0),
+            "achievedTotal": float(customer_totals.get("achieved_total") or 0),
+        },
+        "tasks": {
+            "total": task_total,
+            "overdue": overdue_count,
+            "breakdown": task_breakdown,
+            "recent": recent_tasks,
+        },
+    }
+    cache_set(_SUMMARY_CACHE_KEY, payload, ttl_seconds=_SUMMARY_CACHE_TTL_SECONDS)
+    return jsonify(payload)

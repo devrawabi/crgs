@@ -47,7 +47,7 @@ export async function fetchAllVisits(
     pageSize: 200,
     itemsKey: 'visits',
     fetchPage: ({ limit, offset }) =>
-      fetchVisits({ ...params, limit, offset }) as Promise<Record<string, unknown>>,
+      fetchVisits({ ...params, limit, offset }),
   })
   return { count: visits.length, visits }
 }

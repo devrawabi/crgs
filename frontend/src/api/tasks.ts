@@ -8,6 +8,8 @@ export interface DbTask {
   routeNo: string
   status: string
   dueDate: string
+  customerCodes?: string[]
+  notes?: string
 }
 
 export interface TasksResponse {
@@ -25,6 +27,11 @@ export interface CreateTaskPayload {
   employeeCode: string
   routeNo: string
   dueDate: string
+  /** Required for Other-route tasks. */
+  customerCodes?: string[]
+  /** Also accepted by API as comma-separated fallback. */
+  customers?: string
+  notes?: string
 }
 
 export interface CreateTaskResponse {
@@ -32,6 +39,9 @@ export interface CreateTaskResponse {
   employeeCode: string
   routeNo: string
   dueDate: string
+  status?: string
+  customerCodes?: string[]
+  notes?: string
 }
 
 export interface DeleteTaskPayload {
@@ -64,7 +74,7 @@ export async function fetchAllTasks(
     pageSize: 500,
     itemsKey: 'tasks',
     fetchPage: ({ limit, offset }) =>
-      fetchTasks({ ...params, limit, offset }) as Promise<Record<string, unknown>>,
+      fetchTasks({ ...params, limit, offset }),
   })
   return { count: tasks.length, tasks }
 }

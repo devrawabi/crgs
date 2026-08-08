@@ -57,6 +57,8 @@ class MapPinImage extends StatelessWidget {
                 width: width * 1.35,
                 height: height * 0.28,
                 fit: BoxFit.contain,
+                memCacheWidth: 64,
+                memCacheHeight: 32,
                 errorWidget: (_, _, _) => const SizedBox.shrink(),
               ),
             ),
@@ -65,6 +67,8 @@ class MapPinImage extends StatelessWidget {
             width: width,
             height: height,
             fit: BoxFit.contain,
+            memCacheWidth: 56,
+            memCacheHeight: 92,
             placeholder: (_, _) => SizedBox(
               width: width,
               height: height,

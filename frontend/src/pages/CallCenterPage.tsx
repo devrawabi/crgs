@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { fetchCustomers, type DbCustomer } from '../api/customers'
 import { fetchItems, type DbItemMaster } from '../api/items'
-import { fetchUsers, type DbLoginUser } from '../api/users'
+import { fetchAllUsers, type DbLoginUser } from '../api/users'
 import { useAuth } from '../context/AuthContext'
 import { cn } from '../lib/utils'
 
@@ -38,6 +38,7 @@ interface LineItem {
   uom: string
   rate: number
   qty: number
+  discount: number
 }
 
 interface ChatMessage {
@@ -84,6 +85,7 @@ export function CallCenterPage() {
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
 
   const [salesmen, setSalesmen] = useState<DbLoginUser[]>([])
+  const [salesmenLoading, setSalesmenLoading] = useState(true)
   const [salesmanCode, setSalesmanCode] = useState('')
 
   const [itemQuery, setItemQuery] = useState('')
@@ -109,13 +111,24 @@ export function CallCenterPage() {
   }, [])
 
   useEffect(() => {
-    fetchUsers({ activeOnly: true, limit: 200 })
+    let cancelled = false
+    setSalesmenLoading(true)
+    fetchAllUsers({ activeOnly: true })
       .then((res) => {
+        if (cancelled) return
         const list = res.users ?? []
         setSalesmen(list)
         if (list.length > 0) setSalesmanCode(list[0].employeecode)
       })
-      .catch(() => setSalesmen([]))
+      .catch(() => {
+        if (!cancelled) setSalesmen([])
+      })
+      .finally(() => {
+        if (!cancelled) setSalesmenLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -135,11 +148,17 @@ export function CallCenterPage() {
       return
     }
     const t = window.setTimeout(async () => {
+      const q = customerQuery.trim()
+      if (q.length < 2) {
+        setCustomerResults([])
+        setCustomerLoading(false)
+        return
+      }
       setCustomerLoading(true)
       try {
         const res = await fetchCustomers({
           route: '',
-          search: customerQuery.trim(),
+          search: q,
           limit: 12,
         })
         setCustomerResults(res.customers ?? [])
@@ -159,9 +178,15 @@ export function CallCenterPage() {
       return
     }
     const t = window.setTimeout(async () => {
+      const q = itemQuery.trim()
+      if (q.length < 2) {
+        setItemResults([])
+        setItemLoading(false)
+        return
+      }
       setItemLoading(true)
       try {
-        const res = await fetchItems({ search: itemQuery.trim(), limit: 12 })
+        const res = await fetchItems({ search: q, limit: 12 })
         setItemResults(res.items ?? [])
         setShowItemDropdown(true)
       } catch {
@@ -173,10 +198,19 @@ export function CallCenterPage() {
     return () => window.clearTimeout(t)
   }, [itemQuery])
 
-  const subtotal = useMemo(
-    () => lines.reduce((sum, line) => sum + line.rate * line.qty, 0),
+  const lineDiscountTotal = useMemo(
+    () => lines.reduce((sum, line) => sum + line.discount, 0),
     [lines]
   )
+  const subtotal = useMemo(
+    () =>
+      lines.reduce(
+        (sum, line) => sum + Math.max(line.rate * line.qty - line.discount, 0),
+        0
+      ),
+    [lines]
+  )
+  const totalDiscount = lineDiscountTotal + discount
   const netTotal = Math.max(subtotal - discount, 0)
   const vatAmount = netTotal * VAT_RATE
   const grandTotal = netTotal + vatAmount
@@ -250,6 +284,7 @@ export function CallCenterPage() {
           uom: (item.baseuom || 'EA').trim(),
           rate: Number(item.retailprice ?? 0),
           qty: 1,
+          discount: 0,
         },
       ])
     }
@@ -259,13 +294,19 @@ export function CallCenterPage() {
     itemSearchRef.current?.focus()
   }
 
-  const updateLine = (id: string, patch: Partial<Pick<LineItem, 'qty' | 'rate'>>) => {
+  const updateLine = (
+    id: string,
+    patch: Partial<Pick<LineItem, 'qty' | 'rate' | 'discount'>>
+  ) => {
     setLines((prev) =>
       prev.map((line) => {
         if (line.id !== id) return line
         const next = { ...line, ...patch }
         if (next.qty < 0) next.qty = 0
         if (next.rate < 0) next.rate = 0
+        if (next.discount < 0) next.discount = 0
+        const lineGross = next.rate * next.qty
+        if (next.discount > lineGross) next.discount = lineGross
         return next
       })
     )
@@ -364,41 +405,6 @@ export function CallCenterPage() {
           </button>
         </div>
 
-        <div className="flex-1 min-w-[180px] max-w-md relative">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            value={customerQuery}
-            onChange={(e) => {
-              setCustomerQuery(e.target.value)
-              if (selectedCustomer) setSelectedCustomer(null)
-            }}
-            onFocus={() => customerResults.length > 0 && setShowCustomerDropdown(true)}
-            ref={customerSearchRef}
-            placeholder="Global search customer..."
-            className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-9 pr-3 py-2 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100"
-          />
-          {showCustomerDropdown && (customerResults.length > 0 || customerLoading) && (
-            <div className="absolute z-30 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg max-h-56 overflow-auto">
-              {customerLoading && (
-                <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500">
-                  <Loader2 size={14} className="animate-spin" /> Searching…
-                </div>
-              )}
-              {customerResults.map((c) => (
-                <button
-                  key={c.cust_code}
-                  type="button"
-                  onClick={() => pickCustomer(c)}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-primary-50 border-b border-gray-50 last:border-0"
-                >
-                  <span className="font-medium text-slate-800">{c.cust_name}</span>
-                  <span className="ml-2 text-xs text-gray-400">{c.cust_code}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
         <nav className="hidden xl:flex items-center gap-5 text-sm text-gray-500">
           <span className="font-semibold text-slate-800 border-b-2 border-slate-800 pb-0.5">
             Order Billing
@@ -430,16 +436,46 @@ export function CallCenterPage() {
             <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <Field label="Customer Name">
-                  <input
-                    value={customerQuery}
-                    onChange={(e) => {
-                      setCustomerQuery(e.target.value)
-                      if (selectedCustomer) setSelectedCustomer(null)
-                    }}
-                    onFocus={() => customerResults.length > 0 && setShowCustomerDropdown(true)}
-                    placeholder="Search customer name or code"
-                    className={fieldInput}
-                  />
+                  <div className="relative">
+                    <input
+                      ref={customerSearchRef}
+                      value={customerQuery}
+                      onChange={(e) => {
+                        setCustomerQuery(e.target.value)
+                        if (selectedCustomer) setSelectedCustomer(null)
+                      }}
+                      onFocus={() =>
+                        customerResults.length > 0 && setShowCustomerDropdown(true)
+                      }
+                      placeholder="Search customer name or code"
+                      className={fieldInput}
+                    />
+                    {showCustomerDropdown &&
+                      (customerResults.length > 0 || customerLoading) && (
+                        <div className="absolute z-30 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg max-h-56 overflow-auto">
+                          {customerLoading && (
+                            <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500">
+                              <Loader2 size={14} className="animate-spin" /> Searching…
+                            </div>
+                          )}
+                          {customerResults.map((c) => (
+                            <button
+                              key={c.cust_code}
+                              type="button"
+                              onClick={() => pickCustomer(c)}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-primary-50 border-b border-gray-50 last:border-0"
+                            >
+                              <span className="font-medium text-slate-800">
+                                {c.cust_name}
+                              </span>
+                              <span className="ml-2 text-xs text-gray-400">
+                                {c.cust_code}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                  </div>
                   {selectedCustomer && (
                     <p className="mt-1 text-[11px] text-gray-400">
                       Code {selectedCustomer.cust_code}
@@ -455,8 +491,14 @@ export function CallCenterPage() {
                     value={salesmanCode}
                     onChange={(e) => setSalesmanCode(e.target.value)}
                     className={fieldInput}
+                    disabled={salesmenLoading}
                   >
-                    {salesmen.length === 0 && <option value="">No salesmen</option>}
+                    {salesmenLoading && (
+                      <option value="">Loading salesmen...</option>
+                    )}
+                    {!salesmenLoading && salesmen.length === 0 && (
+                      <option value="">No salesmen</option>
+                    )}
                     {salesmen.map((s) => (
                       <option key={s.employeecode} value={s.employeecode}>
                         {s.username} ({s.employeecode})
@@ -508,17 +550,6 @@ export function CallCenterPage() {
                     <option>Wholesale</option>
                     <option>Special</option>
                   </select>
-                </Field>
-
-                <Field label="Discount">
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={discount}
-                    onChange={(e) => setDiscount(Number(e.target.value) || 0)}
-                    className={fieldInput}
-                  />
                 </Field>
               </div>
             </section>
@@ -652,6 +683,7 @@ export function CallCenterPage() {
                     <th className="px-3 py-2.5 text-left font-semibold">UOM</th>
                     <th className="px-3 py-2.5 text-right font-semibold">Rate</th>
                     <th className="px-3 py-2.5 text-right font-semibold">Qty</th>
+                    <th className="px-3 py-2.5 text-right font-semibold">Discount</th>
                     <th className="px-3 py-2.5 text-right font-semibold">Amount</th>
                   </tr>
                 </thead>
@@ -659,7 +691,7 @@ export function CallCenterPage() {
                   {lines.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={9}
                         className="px-3 py-16 text-center text-sm text-gray-400"
                       >
                         Press F2 to search and add items to this order
@@ -712,8 +744,22 @@ export function CallCenterPage() {
                             className="w-16 rounded border border-gray-200 px-2 py-1 text-right text-sm outline-none focus:border-primary-500"
                           />
                         </td>
+                        <td className="px-3 py-2 text-right">
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={line.discount}
+                            onChange={(e) =>
+                              updateLine(line.id, {
+                                discount: Number(e.target.value) || 0,
+                              })
+                            }
+                            className="w-20 rounded border border-gray-200 px-2 py-1 text-right text-sm outline-none focus:border-primary-500"
+                          />
+                        </td>
                         <td className="px-3 py-2 text-right font-medium text-slate-800">
-                          {formatMoney(line.rate * line.qty)}
+                          {formatMoney(Math.max(line.rate * line.qty - line.discount, 0))}
                         </td>
                       </tr>
                     ))
@@ -820,7 +866,7 @@ export function CallCenterPage() {
             <p className="text-[10px] uppercase tracking-wider text-slate-400">
               Total Discount
             </p>
-            <p className="font-semibold tabular-nums">{formatMoney(discount)}</p>
+            <p className="font-semibold tabular-nums">{formatMoney(totalDiscount)}</p>
           </div>
           <div>
             <p className="text-[10px] uppercase tracking-wider text-slate-400">

@@ -14,6 +14,9 @@ class VisitLocation {
 }
 
 abstract final class LocationService {
+  static const Duration _positionTimeout = Duration(seconds: 12);
+  static const Duration _geocodeTimeout = Duration(seconds: 8);
+
   static Future<bool> ensurePermission() async {
     if (!await Geolocator.isLocationServiceEnabled()) return false;
 
@@ -29,16 +32,27 @@ abstract final class LocationService {
   static Future<Position?> getCurrentPosition() async {
     if (!await ensurePermission()) return null;
 
-    return Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-      ),
-    );
+    try {
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: _positionTimeout,
+        ),
+      ).timeout(_positionTimeout);
+    } catch (_) {
+      // Fall back to last known fix so visit start is never blocked by GPS.
+      try {
+        return await Geolocator.getLastKnownPosition();
+      } catch (_) {
+        return null;
+      }
+    }
   }
 
   static Future<String> reverseGeocode(double latitude, double longitude) async {
     try {
-      final places = await placemarkFromCoordinates(latitude, longitude);
+      final places = await placemarkFromCoordinates(latitude, longitude)
+          .timeout(_geocodeTimeout);
       if (places.isEmpty) return _coordinateLabel(latitude, longitude);
 
       final place = places.first;

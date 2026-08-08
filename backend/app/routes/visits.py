@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -7,10 +7,12 @@ from app.pagination import apply_has_more, parse_limit_offset, rownum_page_sql
 from app.routes.auth import limiter
 from app.security import enforce_owned_employee_code, resolve_employee_scope
 
+
 visits_bp = Blueprint("visits", __name__)
 
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 200
+_ADMIN_DEFAULT_DAYS = 90
 
 
 def _table_name():
@@ -86,7 +88,7 @@ def _serialize_visit(row: dict) -> dict:
         "location": str(row.get("location") or "").strip(),
         "reason": str(row.get("reason") or "").strip(),
         "remarks": str(row.get("remarks") or "").strip(),
-        "followUp": _date_only(row.get("followup")),
+        "followUp": _date_only(row.get("followupdate")),
     }
 
 
@@ -106,6 +108,14 @@ def list_visits():
         max_limit=_MAX_LIMIT,
     )
 
+    date_from = _parse_iso_date(request.args.get("dateFrom", ""))
+    date_to = _parse_iso_date(request.args.get("dateTo", ""))
+    # Admin unscoped list without dates walks the full visit history.
+    if not employee_code and not customer_code and date_from is None and date_to is None:
+        date_from = datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=_ADMIN_DEFAULT_DAYS)
+
     conditions: list[str] = []
     params: dict = {}
     if employee_code:
@@ -114,6 +124,12 @@ def list_visits():
     if customer_code:
         conditions.append("TRIM(CUSTOMERCODE) = :customercode")
         params["customercode"] = customer_code
+    if date_from is not None:
+        conditions.append("VISITDATE >= :date_from")
+        params["date_from"] = date_from
+    if date_to is not None:
+        conditions.append("VISITDATE < :date_to")
+        params["date_to"] = date_to + timedelta(days=1)
 
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
     columns_sql = (
@@ -150,8 +166,13 @@ def list_visits():
 
 
 @visits_bp.post("/start")
+@limiter.limit("60 per minute")
 def start_visit():
-    """Insert a row into CRGS_VISITDETAILS when a visit begins."""
+    """Insert a row into CRGS_VISITDETAILS when a visit begins.
+
+    Idempotent for an open visit (VISITEND IS NULL) for the same
+    employee + customer so mobile retries after timeouts don't duplicate rows.
+    """
     payload = request.get_json(silent=True) or {}
 
     employee_code, owned_err = enforce_owned_employee_code(
@@ -161,7 +182,7 @@ def start_visit():
         return owned_err
     customer_code = str(payload.get("customerCode", "")).strip()
     customer_name = str(payload.get("customerName", "")).strip()
-    route = str(payload.get("route", "")).strip()
+    route = str(payload.get("route", "")).strip() or "-"
     location = str(payload.get("location", "")).strip() or None
     reason = str(payload.get("reason", "")).strip() or None
     remarks = str(payload.get("remarks", "")).strip() or None
@@ -175,8 +196,6 @@ def start_visit():
         return jsonify({"error": "Customer code is required"}), 400
     if not customer_name:
         return jsonify({"error": "Customer name is required"}), 400
-    if not route:
-        return jsonify({"error": "Route is required"}), 400
     if visit_start is None:
         visit_start = datetime.now()
     # Truncate micros so start/end round-trips match Oracle TIMESTAMP equality.
@@ -191,7 +210,7 @@ def start_visit():
     if len(customer_name) > 100:
         return jsonify({"error": "Customer name must be 100 characters or fewer"}), 400
     if len(route) > 20:
-        return jsonify({"error": "Route must be 20 characters or fewer"}), 400
+        route = route[:20]
     if location and len(location) > 255:
         location = location[:255]
     if reason and len(reason) > 200:
@@ -200,8 +219,41 @@ def start_visit():
         remarks = remarks[:500]
 
     table_name = _table_name()
+    columns_sql = (
+        "EMPLOYEECODE, CUSTOMERCODE, CUSTOMERNAME, ROUTE, VISITDATE, "
+        "VISITSTART, VISITEND, TOTALDURATION, LOCATION, REASON, REMARKS, FOLLOWUPDATE"
+    )
 
     with oracle_cursor() as cursor:
+        # Reuse an existing open visit so retries after connection timeouts
+        # don't create duplicate CRGS_VISITDETAILS rows.
+        # ROWNUM (not FETCH FIRST) — Oracle 11g rejects FETCH FIRST with ORA-00933.
+        cursor.execute(
+            f"""
+            SELECT {columns_sql}
+            FROM (
+                SELECT inner_query.*, ROWNUM AS rnum
+                FROM (
+                    SELECT {columns_sql}
+                    FROM {table_name}
+                    WHERE TRIM(EMPLOYEECODE) = :employeecode
+                      AND TRIM(CUSTOMERCODE) = :customercode
+                      AND VISITEND IS NULL
+                    ORDER BY VISITDATE DESC NULLS LAST, VISITSTART DESC NULLS LAST
+                ) inner_query
+                WHERE ROWNUM <= 1
+            )
+            """,
+            {
+                "employeecode": employee_code,
+                "customercode": customer_code,
+            },
+        )
+        existing = cursor.fetchone()
+        if existing is not None:
+            row = _serialize_visit(row_to_dict(cursor, existing))
+            return jsonify({**row, "reused": True}), 200
+
         cursor.execute(
             f"""
             INSERT INTO {table_name}
@@ -256,6 +308,7 @@ def start_visit():
                 "visitDate": visit_date.date().isoformat(),
                 "visitStart": _format_time_only(visit_start),
                 "location": location or "",
+                "reused": False,
             }
         ),
         201,
@@ -263,6 +316,7 @@ def start_visit():
 
 
 @visits_bp.post("/end")
+@limiter.limit("60 per minute")
 def end_visit():
     """Update VISITEND and TOTALDURATION (and form fields) when a visit ends."""
     payload = request.get_json(silent=True) or {}
@@ -356,13 +410,17 @@ def end_visit():
                     FOLLOWUPDATE = NVL(:followup, FOLLOWUPDATE)
                 WHERE ROWID = (
                     SELECT rid FROM (
-                        SELECT ROWID AS rid
-                        FROM {table_name}
-                        WHERE TRIM(EMPLOYEECODE) = :employeecode
-                          AND TRIM(CUSTOMERCODE) = :customercode
-                          AND VISITEND IS NULL
-                        ORDER BY VISITDATE DESC NULLS LAST, VISITSTART DESC NULLS LAST
-                        FETCH FIRST 1 ROW ONLY
+                        SELECT inner_query.rid, ROWNUM AS rnum
+                        FROM (
+                            SELECT ROWID AS rid
+                            FROM {table_name}
+                            WHERE TRIM(EMPLOYEECODE) = :employeecode
+                              AND TRIM(CUSTOMERCODE) = :customercode
+                              AND VISITEND IS NULL
+                            ORDER BY VISITDATE DESC NULLS LAST,
+                                     VISITSTART DESC NULLS LAST
+                        ) inner_query
+                        WHERE ROWNUM <= 1
                     )
                 )
                 """,

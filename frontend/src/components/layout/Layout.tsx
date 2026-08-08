@@ -8,6 +8,7 @@ import {
   BarChart3,
   UserPlus,
   PackageSearch,
+  FileText,
   Headset,
   Menu,
   X,
@@ -30,6 +31,12 @@ const navItems: { to: string; label: string; icon: typeof LayoutDashboard; key: 
     label: 'Product Review Report',
     icon: PackageSearch,
     key: 'product-review-report',
+  },
+  {
+    to: '/work-reports',
+    label: 'Work Reports',
+    icon: FileText,
+    key: 'work-reports',
   },
   { to: '/call-center', label: 'Call Center', icon: Headset, key: 'call-center' },
   { to: '/reports', label: 'Reports', icon: BarChart3, key: 'reports' },
@@ -123,19 +130,14 @@ export function Layout() {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-        <header className="shrink-0 bg-white border-b border-gray-200 px-4 lg:px-8 py-4 flex items-center gap-4">
-          <button
-            className="lg:hidden p-2 rounded-lg hover:bg-gray-100 text-gray-600"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <Menu size={20} />
-          </button>
-          <div className="flex-1" />
-          <span className="text-xs text-gray-500 hidden sm:block">
-            Customer Recovery & Growth System
-          </span>
-        </header>
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative">
+        <button
+          className="lg:hidden absolute top-3 left-3 z-30 p-2 rounded-lg bg-white border border-gray-200 shadow-sm hover:bg-gray-100 text-gray-600"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open menu"
+        >
+          <Menu size={20} />
+        </button>
 
         <main className="flex-1 flex flex-col min-h-0 overflow-hidden p-4 lg:p-8">
           <Outlet />

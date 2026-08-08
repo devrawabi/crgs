@@ -53,9 +53,7 @@ export async function fetchAllProductReviews(
     pageSize: 200,
     itemsKey: 'items',
     fetchPage: ({ limit, offset }) =>
-      fetchProductReviews({ ...params, limit, offset }) as Promise<
-        Record<string, unknown>
-      >,
+      fetchProductReviews({ ...params, limit, offset }),
   })
   return { count: items.length, items }
 }

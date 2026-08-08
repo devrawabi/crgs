@@ -20,6 +20,7 @@ import '../../features/profile/screens/settings_screen.dart';
 import '../../features/recovery/screens/recovery_form_screen.dart';
 import '../../features/reports/screens/reports_screen.dart';
 import '../../features/routes/screens/route_list_screen.dart';
+import '../../features/routes/screens/others_customers_screen.dart';
 import '../../features/tasks/screens/task_management_screen.dart';
 import '../../features/visit/screens/visit_tracking_screen.dart';
 import '../../shared/widgets/navigation/main_shell.dart';
@@ -91,6 +92,13 @@ final routerProvider = Provider<GoRouter>((ref) {
             path: RouteNames.routes,
             pageBuilder: (_, state) =>
                 _fadePage(state, const RouteListScreen()),
+          ),
+          GoRoute(
+            path: RouteNames.othersCustomers,
+            pageBuilder: (_, state) => _slideFromRightPage(
+              state,
+              const OthersCustomersScreen(),
+            ),
           ),
           GoRoute(
             path: RouteNames.routeCustomers,

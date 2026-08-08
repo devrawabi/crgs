@@ -96,7 +96,7 @@ export async function fetchAllUsers(
     pageSize: 500,
     itemsKey: 'users',
     fetchPage: ({ limit, offset }) =>
-      fetchUsers({ ...params, limit, offset }) as Promise<Record<string, unknown>>,
+      fetchUsers({ ...params, limit, offset }),
   })
   return { count: users.length, users }
 }

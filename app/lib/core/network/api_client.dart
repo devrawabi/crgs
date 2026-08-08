@@ -28,10 +28,10 @@ class ApiClient {
     final dio = Dio(
       BaseOptions(
         baseUrl: ApiEndpoints.baseUrl,
-        // Catalog pages can be large over tunnels — keep receive generous.
-        connectTimeout: const Duration(seconds: 20),
-        receiveTimeout: const Duration(seconds: 45),
-        sendTimeout: const Duration(seconds: 30),
+        // Tunnel + Oracle can be slow; keep connect/receive generous.
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 60),
+        sendTimeout: const Duration(seconds: 45),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
@@ -166,7 +166,7 @@ class _AuthInterceptor extends Interceptor {
 }
 
 /// Retries transient network / 5xx failures with exponential backoff.
-/// Skips non-idempotent methods and client (4xx) errors.
+/// Safe POSTs (visit start/end) are retried — backend start is idempotent.
 class _RetryInterceptor extends Interceptor {
   _RetryInterceptor({
     required this.dio,
@@ -180,6 +180,16 @@ class _RetryInterceptor extends Interceptor {
 
   static const _retryableMethods = {'GET', 'HEAD', 'OPTIONS'};
 
+  /// Visit start/end tolerate retries (start reuses an open visit row).
+  static bool _isRetryablePost(RequestOptions request) {
+    if (request.method.toUpperCase() != 'POST') return false;
+    final path = request.path;
+    return path == ApiEndpoints.visitsStart ||
+        path.endsWith(ApiEndpoints.visitsStart) ||
+        path == ApiEndpoints.visitsEnd ||
+        path.endsWith(ApiEndpoints.visitsEnd);
+  }
+
   @override
   Future<void> onError(
     DioException err,
@@ -188,8 +198,10 @@ class _RetryInterceptor extends Interceptor {
     final request = err.requestOptions;
     final attempt = (request.extra['retry_attempt'] as int?) ?? 0;
     final method = request.method.toUpperCase();
+    final canRetryMethod =
+        _retryableMethods.contains(method) || _isRetryablePost(request);
 
-    if (attempt >= maxRetries || !_retryableMethods.contains(method)) {
+    if (attempt >= maxRetries || !canRetryMethod) {
       return handler.next(err);
     }
     if (!_shouldRetry(err)) {

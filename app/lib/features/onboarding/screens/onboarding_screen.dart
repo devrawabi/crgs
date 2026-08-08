@@ -321,6 +321,8 @@ class _AnimatedOnboardSlideState extends State<_AnimatedOnboardSlide>
                           child: Image.asset(
                             widget.data.illustration,
                             fit: BoxFit.contain,
+                            filterQuality: FilterQuality.medium,
+                            cacheWidth: 768,
                           ),
                         ),
                       ),

@@ -5,6 +5,7 @@ abstract final class RouteNames {
   static const dashboard = '/dashboard';
   static const routes = '/routes';
   static const routeCustomers = '/routes/:routeId';
+  static const othersCustomers = '/others-customers';
   static const customers = '/customers';
   static const customerDetail = '/customers/:id';
   static const visit = '/visit/:customerId';

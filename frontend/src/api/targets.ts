@@ -62,9 +62,7 @@ export async function fetchAllSalesTargets(
     pageSize: 200,
     itemsKey: 'targets',
     fetchPage: ({ limit, offset }) =>
-      fetchSalesTargets({ ...params, limit, offset }) as Promise<
-        Record<string, unknown>
-      >,
+      fetchSalesTargets({ ...params, limit, offset }),
   })
   return { count: targets.length, targets }
 }
@@ -150,9 +148,7 @@ export async function fetchAllProductTargets(
     pageSize: 200,
     itemsKey: 'targets',
     fetchPage: ({ limit, offset }) =>
-      fetchProductTargets({ ...params, limit, offset }) as Promise<
-        Record<string, unknown>
-      >,
+      fetchProductTargets({ ...params, limit, offset }),
   })
   return { count: targets.length, targets }
 }

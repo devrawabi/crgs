@@ -14,24 +14,29 @@ import { Table } from '../components/ui/Table'
 import { ExecutiveDetailReport } from '../components/reports/ExecutiveDetailReport'
 import { formatCurrency, formatPercent } from '../context/AppContext'
 import {
-  fetchAllSalesTargets,
-  fetchAllCustomerTargets,
+  fetchSalesTargets,
+  fetchCustomerTargets,
   type DbSalesTarget,
   type DbCustomerTarget,
 } from '../api/targets'
 import {
   fetchAllUsers,
+  isRouteNoSelected,
   normalizeRouteNo,
   parseRouteColumn,
   type DbLoginUser,
 } from '../api/users'
-import { fetchAllRoutes, type DbRoute } from '../api/routes'
+import { fetchRoutes, type DbRoute } from '../api/routes'
 import {
   fetchCustomerStatsBatch,
   type CustomerRouteStats,
 } from '../api/customers'
+import { InlineLoading } from '../components/ui/LoadingState'
 
 type ReportTab = 'executive' | 'executive_detail' | 'route'
+type ReportScope = 'all' | 'route'
+
+const REPORT_TARGET_PAGE = 200
 
 const reportTabs: { id: ReportTab; label: string }[] = [
   { id: 'executive', label: 'Executive Performance' },
@@ -39,8 +44,16 @@ const reportTabs: { id: ReportTab; label: string }[] = [
   { id: 'route', label: 'Route Performance' },
 ]
 
+function targetCoversRoute(targetRouteNo: string, routeNo: string) {
+  const nos = parseRouteColumn(targetRouteNo)
+  if (nos.length === 0) return true
+  return isRouteNoSelected(nos, routeNo)
+}
+
 export function ReportsPage() {
   const [tab, setTab] = useState<ReportTab>('executive')
+  const [reportScope, setReportScope] = useState<ReportScope>('all')
+  const [selectedRouteNo, setSelectedRouteNo] = useState('')
   const [dbExecutives, setDbExecutives] = useState<DbLoginUser[]>([])
   const [dbRoutes, setDbRoutes] = useState<DbRoute[]>([])
   const [salesTargets, setSalesTargets] = useState<DbSalesTarget[]>([])
@@ -81,40 +94,62 @@ export function ReportsPage() {
     )
   }, [dbExecutives])
 
+  const routeOptions = useMemo(
+    () =>
+      assignedRouteNos.map((no) => ({
+        value: no,
+        label: routeNameByNo.get(no) ?? no,
+      })),
+    [assignedRouteNos, routeNameByNo]
+  )
+
+  useEffect(() => {
+    if (reportScope !== 'route') return
+    if (!selectedRouteNo && assignedRouteNos.length > 0) {
+      setSelectedRouteNo(assignedRouteNos[0])
+    }
+  }, [reportScope, selectedRouteNo, assignedRouteNos])
+
+  const activeRouteNo =
+    reportScope === 'route' ? normalizeRouteNo(selectedRouteNo) : ''
+
   const loadReports = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [usersRes, routesRes, salesRes, customerRes] = await Promise.all([
-        fetchAllUsers({ activeOnly: true }),
-        fetchAllRoutes(),
-        fetchAllSalesTargets({ period: 'monthly' }),
-        fetchAllCustomerTargets(),
+      const usersRes = await fetchAllUsers({ activeOnly: true })
+      setDbExecutives(usersRes.users)
+
+      const assignedNos = Array.from(
+        new Set(usersRes.users.flatMap((u) => parseRouteColumn(u.route)))
+      ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+
+      const [routesRes, salesRes, customerRes] = await Promise.all([
+        assignedNos.length > 0
+          ? fetchRoutes({ routeNos: assignedNos, limit: 500, offset: 0 })
+          : Promise.resolve({ routes: [] as DbRoute[] }),
+        fetchSalesTargets({ period: 'monthly', limit: REPORT_TARGET_PAGE, offset: 0 }),
+        fetchCustomerTargets({ limit: REPORT_TARGET_PAGE, offset: 0 }),
       ])
 
-      setDbExecutives(usersRes.users)
       setDbRoutes(routesRes.routes)
       setSalesTargets(salesRes.targets)
       setCustomerTargets(customerRes.targets)
       setLoading(false)
 
-      const routeNos = Array.from(
-        new Set(usersRes.users.flatMap((u) => parseRouteColumn(u.route)))
-      ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-
-      if (routeNos.length === 0) {
+      if (assignedNos.length === 0) {
         setRouteStats({})
         return
       }
 
       setStatsLoading(true)
       try {
-        const batch = await fetchCustomerStatsBatch(routeNos)
+        const batch = await fetchCustomerStatsBatch(assignedNos)
         const next: Record<string, CustomerRouteStats> = {}
         for (const row of batch.routes) {
           next[normalizeRouteNo(row.route) || row.route] = row.stats
         }
-        for (const routeNo of routeNos) {
+        for (const routeNo of assignedNos) {
           if (!next[routeNo]) {
             next[routeNo] = { all: 0, missing: 0, outstanding: 0 }
           }
@@ -146,14 +181,35 @@ export function ReportsPage() {
     loadReports()
   }, [loadReports])
 
+  const filteredSalesTargets = useMemo(() => {
+    if (!activeRouteNo) return salesTargets
+    return salesTargets.filter((t) => targetCoversRoute(t.routeNo, activeRouteNo))
+  }, [salesTargets, activeRouteNo])
+
+  const filteredCustomerTargets = useMemo(() => {
+    if (!activeRouteNo) return customerTargets
+    return customerTargets.filter((t) =>
+      targetCoversRoute(t.routeNo, activeRouteNo)
+    )
+  }, [customerTargets, activeRouteNo])
+
+  const filteredExecutives = useMemo(() => {
+    if (!activeRouteNo) return dbExecutives
+    return dbExecutives.filter((exec) =>
+      isRouteNoSelected(parseRouteColumn(exec.route), activeRouteNo)
+    )
+  }, [dbExecutives, activeRouteNo])
+
   const execReport = useMemo(() => {
-    return dbExecutives.map((exec) => {
+    return filteredExecutives.map((exec) => {
       const code = exec.employeecode.trim().toUpperCase()
-      const routes = parseRouteColumn(exec.route)
-      const monthly = salesTargets.filter(
+      const routes = parseRouteColumn(exec.route).filter(
+        (routeNo) => !activeRouteNo || routeNo === activeRouteNo
+      )
+      const monthly = filteredSalesTargets.filter(
         (t) => t.employeeCode.trim().toUpperCase() === code
       )
-      const recovered = customerTargets.find(
+      const recovered = filteredCustomerTargets.find(
         (t) =>
           t.employeeCode.trim().toUpperCase() === code &&
           t.type === 'missing_recovery'
@@ -166,24 +222,39 @@ export function ReportsPage() {
         (sum, routeNo) => sum + (routeStats[routeNo]?.missing ?? 0),
         0
       )
+      const target = monthly.reduce((s, t) => s + t.targetAmount, 0)
+      const achieved = monthly.reduce((s, t) => s + t.achievedAmount, 0)
       return {
         name: exec.username,
         routes: routes.length,
         customers,
         missing,
-        target: monthly.reduce((s, t) => s + t.targetAmount, 0),
-        achieved: monthly.reduce((s, t) => s + t.achievedAmount, 0),
+        target,
+        achieved,
+        progress: formatPercent(achieved, target),
         recoveryRate: recovered
           ? formatPercent(recovered.achievedCount ?? 0, recovered.targetCount)
           : 0,
       }
     })
-  }, [dbExecutives, salesTargets, customerTargets, routeStats])
+  }, [
+    filteredExecutives,
+    filteredSalesTargets,
+    filteredCustomerTargets,
+    routeStats,
+    activeRouteNo,
+  ])
 
   const routeReport = useMemo(() => {
-    return assignedRouteNos.map((routeNo) => {
+    const nos = activeRouteNo ? [activeRouteNo] : assignedRouteNos
+    return nos.map((routeNo) => {
       const stats = routeStats[routeNo] ?? { all: 0, missing: 0, outstanding: 0 }
       const executive = executiveByRoute.get(routeNo)
+      const routeSales = salesTargets.filter((t) =>
+        targetCoversRoute(t.routeNo, routeNo)
+      )
+      const target = routeSales.reduce((s, t) => s + t.targetAmount, 0)
+      const achieved = routeSales.reduce((s, t) => s + t.achievedAmount, 0)
       return {
         code: routeNo,
         name: routeNameByNo.get(routeNo) ?? routeNo,
@@ -191,9 +262,41 @@ export function ReportsPage() {
         total: stats.all,
         missing: stats.missing,
         outstandingCount: stats.outstanding,
+        target,
+        achieved,
+        progress: formatPercent(achieved, target),
       }
     })
-  }, [assignedRouteNos, routeStats, executiveByRoute, routeNameByNo])
+  }, [
+    activeRouteNo,
+    assignedRouteNos,
+    routeStats,
+    executiveByRoute,
+    routeNameByNo,
+    salesTargets,
+  ])
+
+  const allSummary = useMemo(() => {
+    const customers = routeReport.reduce((s, r) => s + r.total, 0)
+    const missing = routeReport.reduce((s, r) => s + r.missing, 0)
+    const outstanding = routeReport.reduce((s, r) => s + r.outstandingCount, 0)
+    const target = routeReport.reduce((s, r) => s + r.target, 0)
+    const achieved = routeReport.reduce((s, r) => s + r.achieved, 0)
+    return {
+      routes: routeReport.length,
+      customers,
+      missing,
+      outstanding,
+      target,
+      achieved,
+      progress: formatPercent(achieved, target),
+    }
+  }, [routeReport])
+
+  const scopeLabel =
+    reportScope === 'all'
+      ? 'All routes'
+      : (routeNameByNo.get(activeRouteNo) ?? activeRouteNo) || 'Select route'
 
   return (
     <div className="flex-1 overflow-auto min-h-0">
@@ -203,6 +306,54 @@ export function ReportsPage() {
       />
 
       {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+          <button
+            type="button"
+            onClick={() => setReportScope('all')}
+            className={`px-3 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
+              reportScope === 'all'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            All Routes
+          </button>
+          <button
+            type="button"
+            onClick={() => setReportScope('route')}
+            className={`px-3 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
+              reportScope === 'route'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            Route-wise
+          </button>
+        </div>
+
+        {reportScope === 'route' && (
+          <select
+            value={selectedRouteNo}
+            onChange={(e) => setSelectedRouteNo(e.target.value)}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 min-w-[220px]"
+          >
+            {routeOptions.length === 0 && (
+              <option value="">No assigned routes</option>
+            )}
+            {routeOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label} ({opt.value})
+              </option>
+            ))}
+          </select>
+        )}
+
+        <span className="text-xs text-gray-500 ml-auto">
+          Showing: <span className="font-semibold text-slate-700">{scopeLabel}</span>
+        </span>
+      </div>
 
       <div className="flex flex-wrap gap-1 mb-6 bg-gray-100 p-1 rounded-lg">
         {reportTabs.map((t) => (
@@ -220,18 +371,46 @@ export function ReportsPage() {
         ))}
       </div>
 
-      {loading && (
-        <p className="mb-4 text-sm text-gray-500">Loading report data...</p>
-      )}
+      {loading && <InlineLoading label="Loading report data..." />}
       {!loading && statsLoading && (
-        <p className="mb-4 text-sm text-gray-500">
-          Loading live customer stats by route...
-        </p>
+        <InlineLoading label="Loading live customer stats by route..." />
+      )}
+
+      {(tab === 'executive' || tab === 'route') && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+          <SummaryTile
+            label={reportScope === 'all' ? 'Routes' : 'Route'}
+            value={
+              reportScope === 'all'
+                ? String(allSummary.routes)
+                : scopeLabel
+            }
+          />
+          <SummaryTile label="Customers" value={String(allSummary.customers)} />
+          <SummaryTile
+            label="Sales Progress"
+            value={`${allSummary.progress}%`}
+            hint={`${formatCurrency(allSummary.achieved)} / ${formatCurrency(allSummary.target)}`}
+          />
+          <SummaryTile
+            label="Missing"
+            value={String(allSummary.missing)}
+            hint={`${allSummary.outstanding} outstanding`}
+            danger
+          />
+        </div>
       )}
 
       {tab === 'executive' && (
         <>
-          <Card title="Executive Performance Summary" className="mb-6">
+          <Card
+            title={
+              reportScope === 'all'
+                ? 'Executive Performance Summary — All Routes'
+                : `Executive Performance — ${scopeLabel}`
+            }
+            className="mb-6"
+          >
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={execReport}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -265,6 +444,7 @@ export function ReportsPage() {
                 { key: 'missing', label: 'Missing' },
                 { key: 'target', label: 'Monthly Target' },
                 { key: 'achieved', label: 'Achieved' },
+                { key: 'progress', label: 'Progress' },
                 { key: 'recovery', label: 'Recovery Rate' },
               ]}
             >
@@ -276,17 +456,27 @@ export function ReportsPage() {
                   <td className="px-4 py-3 text-red-600">{row.missing}</td>
                   <td className="px-4 py-3">{formatCurrency(row.target)}</td>
                   <td className="px-4 py-3">{formatCurrency(row.achieved)}</td>
+                  <td className="px-4 py-3 font-semibold tabular-nums">
+                    {row.progress}%
+                  </td>
                   <td className="px-4 py-3">{row.recoveryRate}%</td>
                 </tr>
               ))}
             </Table>
+            {!loading && execReport.length === 0 && (
+              <p className="mt-4 text-sm text-gray-500">
+                {reportScope === 'route'
+                  ? 'No executives assigned to this route.'
+                  : 'No executive data available.'}
+              </p>
+            )}
           </Card>
         </>
       )}
 
       {tab === 'executive_detail' && (
         <ExecutiveDetailReport
-          executives={dbExecutives}
+          executives={filteredExecutives}
           routeNameByNo={routeNameByNo}
           loadingUsers={loading}
         />
@@ -294,8 +484,16 @@ export function ReportsPage() {
 
       {tab === 'route' && (
         <Card
-          title="Route Performance"
-          subtitle={`${routeReport.length} assigned routes · live customer stats`}
+          title={
+            reportScope === 'all'
+              ? 'Route Performance — All Routes'
+              : `Route Performance — ${scopeLabel}`
+          }
+          subtitle={
+            reportScope === 'all'
+              ? `${routeReport.length} assigned routes · live customer & sales stats`
+              : 'Live customer & sales stats for selected route'
+          }
         >
           <Table
             columns={[
@@ -304,6 +502,9 @@ export function ReportsPage() {
               { key: 'total', label: 'Total Customers' },
               { key: 'missing', label: 'Missing' },
               { key: 'outstanding', label: 'Outstanding' },
+              { key: 'target', label: 'Sales Target' },
+              { key: 'achieved', label: 'Achieved' },
+              { key: 'progress', label: 'Progress' },
             ]}
           >
             {routeReport.map((row) => (
@@ -316,16 +517,51 @@ export function ReportsPage() {
                 <td className="px-4 py-3">{row.total}</td>
                 <td className="px-4 py-3 text-red-600">{row.missing}</td>
                 <td className="px-4 py-3">{row.outstandingCount}</td>
+                <td className="px-4 py-3">{formatCurrency(row.target)}</td>
+                <td className="px-4 py-3">{formatCurrency(row.achieved)}</td>
+                <td className="px-4 py-3 font-semibold tabular-nums">
+                  {row.progress}%
+                </td>
               </tr>
             ))}
           </Table>
           {!loading && routeReport.length === 0 && (
             <p className="mt-4 text-sm text-gray-500">
-              No routes assigned to active executives.
+              {reportScope === 'route'
+                ? 'Select a route to view performance.'
+                : 'No routes assigned to active executives.'}
             </p>
           )}
         </Card>
       )}
+    </div>
+  )
+}
+
+function SummaryTile({
+  label,
+  value,
+  hint,
+  danger,
+}: {
+  label: string
+  value: string
+  hint?: string
+  danger?: boolean
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+        {label}
+      </p>
+      <p
+        className={`mt-1 text-lg font-bold truncate ${
+          danger ? 'text-red-600' : 'text-slate-800'
+        }`}
+      >
+        {value}
+      </p>
+      {hint && <p className="mt-0.5 text-[11px] text-gray-400 truncate">{hint}</p>}
     </div>
   )
 }

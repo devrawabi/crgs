@@ -33,6 +33,11 @@ const ProductReviewReportPage = lazy(() =>
     default: m.ProductReviewReportPage,
   }))
 )
+const WorkReportsPage = lazy(() =>
+  import('./pages/WorkReportsPage').then((m) => ({
+    default: m.WorkReportsPage,
+  }))
+)
 const CallCenterPage = lazy(() =>
   import('./pages/CallCenterPage').then((m) => ({ default: m.CallCenterPage }))
 )
@@ -85,6 +90,9 @@ export default function App() {
                         path="product-review-report"
                         element={<ProductReviewReportPage />}
                       />
+                    </Route>
+                    <Route element={<RoleRoute navKey="work-reports" />}>
+                      <Route path="work-reports" element={<WorkReportsPage />} />
                     </Route>
                     <Route element={<RoleRoute navKey="call-center" />}>
                       <Route path="call-center" element={<CallCenterPage />} />

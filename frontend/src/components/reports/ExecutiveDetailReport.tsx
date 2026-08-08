@@ -9,17 +9,17 @@ import {
   CUSTOMER_TARGET_LABELS,
   PRODUCT_TARGET_LABELS,
 } from '../../data/mockData'
-import { fetchAllOrders, type DbOrder } from '../../api/orders'
-import { fetchAllTasks, type DbTask } from '../../api/tasks'
-import { fetchAllVisits, type DbVisit } from '../../api/visits'
+import { fetchOrders, fetchAllOrders, type DbOrder } from '../../api/orders'
+import { fetchTasks, type DbTask } from '../../api/tasks'
+import { fetchVisits, type DbVisit } from '../../api/visits'
 import {
-  fetchAllProductReviews,
+  fetchProductReviews,
   type DbProductReview,
 } from '../../api/productReviews'
 import {
-  fetchAllSalesTargets,
-  fetchAllProductTargets,
-  fetchAllCustomerTargets,
+  fetchSalesTargets,
+  fetchProductTargets,
+  fetchCustomerTargets,
   type DbSalesTarget,
   type DbProductTarget,
   type DbCustomerTarget,
@@ -30,8 +30,11 @@ import {
   type DbLoginUser,
 } from '../../api/users'
 import { downloadExecutiveDetailPdf } from '../../utils/downloadExecutiveDetailPdf'
+import { InlineLoading } from '../ui/LoadingState'
 
 type DetailSection = 'orders' | 'visits' | 'tasks' | 'targets' | 'reviews'
+
+const DETAIL_PAGE_SIZE = 100
 
 interface ExecutiveDetailReportProps {
   executives: DbLoginUser[]
@@ -97,6 +100,7 @@ export function ExecutiveDetailReport({
   )
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailTruncated, setDetailTruncated] = useState(false)
 
   const selectedExecutive = useMemo(
     () =>
@@ -117,7 +121,11 @@ export function ExecutiveDetailReport({
   )
 
   const orderLineCount = useMemo(
-    () => orders.reduce((sum, o) => sum + (o.items?.length ?? 0), 0),
+    () =>
+      orders.reduce(
+        (sum, o) => sum + (o.itemCount ?? o.items?.length ?? 0),
+        0
+      ),
     [orders]
   )
 
@@ -138,6 +146,7 @@ export function ExecutiveDetailReport({
     async (employeeCode: string) => {
       setDetailLoading(true)
       setDetailError(null)
+      setDetailTruncated(false)
       try {
         const [
           ordersRes,
@@ -148,13 +157,35 @@ export function ExecutiveDetailReport({
           productRes,
           customerTargetRes,
         ] = await Promise.all([
-          fetchAllOrders({ employeeCode }),
-          fetchAllVisits({ employeeCode }),
-          fetchAllTasks({ employeeCode }),
-          fetchAllProductReviews({ employeeCode }),
-          fetchAllSalesTargets({ employeeCode }),
-          fetchAllProductTargets({ employeeCode }),
-          fetchAllCustomerTargets({ employeeCode }),
+          // First page only — full history available via Excel export.
+          fetchOrders({
+            employeeCode,
+            includeDetails: false,
+            limit: DETAIL_PAGE_SIZE,
+            offset: 0,
+          }),
+          fetchVisits({ employeeCode, limit: DETAIL_PAGE_SIZE, offset: 0 }),
+          fetchTasks({ employeeCode, limit: DETAIL_PAGE_SIZE, offset: 0 }),
+          fetchProductReviews({
+            employeeCode,
+            limit: DETAIL_PAGE_SIZE,
+            offset: 0,
+          }),
+          fetchSalesTargets({
+            employeeCode,
+            limit: DETAIL_PAGE_SIZE,
+            offset: 0,
+          }),
+          fetchProductTargets({
+            employeeCode,
+            limit: DETAIL_PAGE_SIZE,
+            offset: 0,
+          }),
+          fetchCustomerTargets({
+            employeeCode,
+            limit: DETAIL_PAGE_SIZE,
+            offset: 0,
+          }),
         ])
 
         setOrders(ordersRes.orders)
@@ -164,8 +195,18 @@ export function ExecutiveDetailReport({
         setSalesTargets(salesRes.targets ?? [])
         setProductTargets(productRes.targets ?? [])
         setCustomerTargets(customerTargetRes.targets ?? [])
+        setDetailTruncated(
+          ordersRes.has_more === true ||
+            visitsRes.has_more === true ||
+            tasksRes.has_more === true ||
+            reviewsRes.has_more === true ||
+            salesRes.has_more === true ||
+            productRes.has_more === true ||
+            customerTargetRes.has_more === true
+        )
       } catch (err) {
         clearDetails()
+        setDetailTruncated(false)
         setDetailError(
           err instanceof Error
             ? err.message
@@ -195,7 +236,7 @@ export function ExecutiveDetailReport({
     [routeNameByNo]
   )
 
-  const downloadExcel = () => {
+  const downloadExcel = async () => {
     if (!selectedExecutive) return
 
     const workbook = XLSX.utils.book_new()
@@ -203,14 +244,34 @@ export function ExecutiveDetailReport({
     const code = selectedExecutive.employeecode
     const routeNames = routeNos.map((no) => routeLabel(no) || no).join(', ')
 
+    // Line-item sheet needs details; fetch only when exporting (not on page load).
+    let exportOrders = orders
+    const needsDetails = orders.some((o) => !(o.items && o.items.length > 0))
+    if (needsDetails && code) {
+      try {
+        const detailed = await fetchAllOrders({
+          employeeCode: code,
+          includeDetails: true,
+        })
+        exportOrders = detailed.orders
+      } catch {
+        exportOrders = orders
+      }
+    }
+
+    const exportLineCount = exportOrders.reduce(
+      (sum, o) => sum + (o.items?.length ?? o.itemCount ?? 0),
+      0
+    )
+
     const summarySheet = XLSX.utils.aoa_to_sheet([
       ['Executive Performance Detail — Full Export'],
       ['Executive', execName],
       ['Employee Code', code],
       ['Designation', selectedExecutive.designation || ''],
       ['Routes', routeNames || routeNos.join(', ') || '—'],
-      ['Orders', orders.length],
-      ['Order Line Items', orderLineCount],
+      ['Orders', exportOrders.length],
+      ['Order Line Items', exportLineCount],
       ['Visits', visits.length],
       ['Tasks (All)', tasks.length],
       ['Tasks (Completed)', completedTasks.length],
@@ -223,7 +284,7 @@ export function ExecutiveDetailReport({
     XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary')
 
     const ordersSheet = sheetFromRows(
-      orders.map((o) => ({
+      exportOrders.map((o) => ({
         'Order No': o.orderNo || '',
         'Order Date': o.orderDate || '',
         'Employee Code': o.employeeCode || code,
@@ -253,7 +314,7 @@ export function ExecutiveDetailReport({
     XLSX.utils.book_append_sheet(workbook, ordersSheet, 'Orders')
 
     const orderItemsSheet = sheetFromRows(
-      orders.flatMap((o) =>
+      exportOrders.flatMap((o) =>
         (o.items ?? []).map((item) => ({
           'Order No': o.orderNo || '',
           'Order Date': o.orderDate || '',
@@ -635,7 +696,14 @@ export function ExecutiveDetailReport({
       {detailError && <p className="text-sm text-red-600">{detailError}</p>}
 
       {selectedCode && detailLoading && (
-        <p className="text-sm text-gray-500">Loading executive details...</p>
+        <InlineLoading label="Loading executive details..." />
+      )}
+
+      {selectedCode && !detailLoading && detailTruncated && (
+        <p className="mb-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          Showing the latest {DETAIL_PAGE_SIZE} rows per section. Export Excel for the
+          full history.
+        </p>
       )}
 
       {selectedCode && !detailLoading && (

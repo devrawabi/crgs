@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -41,7 +43,10 @@ class _VisitTrackingScreenState extends ConsumerState<VisitTrackingScreen> {
   bool _locationInitialized = false;
   bool _isEndingVisit = false;
   bool _isInitializing = true;
+  bool _isRetryingStart = false;
   bool _allowExit = false;
+  bool _startAttempted = false;
+  String? _startError;
   final Set<String> _suggestedProductIds = {};
 
   @override
@@ -125,6 +130,12 @@ class _VisitTrackingScreenState extends ConsumerState<VisitTrackingScreen> {
     final user = ref.read(currentUserProvider);
     final employeeCode = user?.employeeCode.trim() ?? '';
     if (employeeCode.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _startAttempted = true;
+          _startError = 'Employee code missing. Please log in again.';
+        });
+      }
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         const SnackBar(
           content: Text('Employee code missing. Please log in again.'),
@@ -138,26 +149,67 @@ class _VisitTrackingScreenState extends ConsumerState<VisitTrackingScreen> {
         visit?.status == VisitStatus.inProgress &&
         visit?.customerId == widget.customerId;
 
-    if (!isActiveForCustomer) {
-      final route = customer.routeId.trim().isNotEmpty
-          ? customer.routeId.trim()
-          : customer.routeName.trim();
-      try {
-        await ref
-            .read(visitProvider.notifier)
-            .startVisit(
-              employeeCode: employeeCode,
-              customerId: widget.customerId,
-              customerName: customer.name,
-              route: route,
-              location: customer.location,
-            );
-      } catch (error) {
-        if (!mounted) return;
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text('Failed to save visit start: $error')),
-        );
+    if (isActiveForCustomer && (visit?.persisted ?? false)) {
+      if (mounted) {
+        setState(() {
+          _startAttempted = true;
+          _startError = null;
+        });
       }
+      return;
+    }
+
+    _startAttempted = true;
+    final route = customer.routeId.trim().isNotEmpty
+        ? customer.routeId.trim()
+        : customer.routeName.trim();
+    try {
+      await ref.read(visitProvider.notifier).startVisit(
+            employeeCode: employeeCode,
+            customerId: widget.customerId,
+            customerName: customer.name,
+            route: route.isEmpty ? '-' : route,
+            location: customer.location,
+          );
+      if (mounted) setState(() => _startError = null);
+    } catch (error) {
+      if (!mounted) return;
+      // Local visit keeps running; surface a recoverable sync error.
+      setState(() => _startError = error.toString());
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text('Visit sync delayed: $error'),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: _retryStartVisit,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _retryStartVisit() async {
+    if (_isRetryingStart) return;
+    setState(() {
+      _isRetryingStart = true;
+      _startError = null;
+    });
+    try {
+      final visit = ref.read(visitProvider);
+      final isActiveForCustomer =
+          visit?.status == VisitStatus.inProgress &&
+          visit?.customerId == widget.customerId;
+      if (isActiveForCustomer && !(visit?.persisted ?? false)) {
+        await ref.read(visitProvider.notifier).retryPersistStart();
+      } else {
+        await _ensureVisitStarted();
+      }
+      if (mounted) setState(() => _startError = null);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _startError = error.toString());
+    } finally {
+      if (mounted) setState(() => _isRetryingStart = false);
     }
   }
 
@@ -226,15 +278,49 @@ class _VisitTrackingScreenState extends ConsumerState<VisitTrackingScreen> {
   @override
   Widget build(BuildContext context) {
     final customer = ref.watch(customerByIdProvider(widget.customerId));
-    final visit = ref.watch(visitProvider);
+    // Select only fields that should rebuild this screen — duration ticks
+    // live inside _TimerCard so the form/map/orders aren't rebuilt every second.
+    final visitSnapshot = ref.watch(
+      visitProvider.select(
+        (v) => (
+          customerId: v?.customerId,
+          status: v?.status,
+          persisted: v?.persisted ?? false,
+          startTime: v?.startTime,
+        ),
+      ),
+    );
     final reasons = ref.watch(recoveryReasonsProvider);
     final theme = ShadTheme.of(context);
+    final notifier = ref.read(visitProvider.notifier);
 
-    final isActive =
-        visit?.status == VisitStatus.inProgress &&
-        visit?.customerId == widget.customerId;
+    final isActive = visitSnapshot.status == VisitStatus.inProgress &&
+        visitSnapshot.customerId == widget.customerId;
+
+    // If customer arrives after first frame, kick off start once.
+    if (!_isInitializing &&
+        !_startAttempted &&
+        customer != null &&
+        !isActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _startAttempted) return;
+        final current = ref.read(visitProvider);
+        final stillNeedsStart =
+            current == null ||
+            current.customerId != widget.customerId ||
+            current.status != VisitStatus.inProgress;
+        if (stillNeedsStart && customer.id == widget.customerId) {
+          _ensureVisitStarted();
+        }
+      });
+    }
+
+    final isPersisted = visitSnapshot.persisted;
+    final isSyncing = isActive && !isPersisted;
+    final syncError = _startError ?? notifier.lastStartError;
     final isPageLoading = _isInitializing && !isActive;
-    final canEndVisit = isActive && (visit?.persisted ?? false);
+    // Allow ending as soon as the local visit is active; checkout persists first.
+    final canEndVisit = isActive;
     final canLeave = _allowExit || (!isPageLoading && !isActive);
 
     Widget page;
@@ -251,8 +337,6 @@ class _VisitTrackingScreenState extends ConsumerState<VisitTrackingScreen> {
         body: Center(child: Text('Customer not found')),
       );
     } else {
-      final duration = isActive ? visit!.duration : Duration.zero;
-
       page = ShadPageScaffold(
         title: 'Visit in Progress',
         subtitle: customer.name,
@@ -280,20 +364,14 @@ class _VisitTrackingScreenState extends ConsumerState<VisitTrackingScreen> {
           child: ShadButton(
             onPressed: (canEndVisit && !_isEndingVisit) ? _endVisit : null,
             width: double.infinity,
-            leading: (_isEndingVisit || (isActive && !canEndVisit))
+            leading: _isEndingVisit
                 ? const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(AppIcons.logoutDoor, size: 18),
-            child: Text(
-              _isEndingVisit
-                  ? 'Saving...'
-                  : (isActive && !canEndVisit)
-                  ? 'Starting visit...'
-                  : 'End Visit',
-            ),
+            child: Text(_isEndingVisit ? 'Saving...' : 'End Visit'),
           ),
         ),
         body: SingleChildScrollView(
@@ -301,7 +379,19 @@ class _VisitTrackingScreenState extends ConsumerState<VisitTrackingScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _TimerCard(duration: duration, isActive: isActive),
+              _TimerCard(
+                startTime: isActive ? visitSnapshot.startTime : null,
+                isActive: isActive,
+                isSyncing: isSyncing,
+              ),
+              if (isSyncing || syncError != null) ...[
+                const SizedBox(height: 10),
+                _VisitSyncBanner(
+                  error: syncError,
+                  isRetrying: _isRetryingStart || notifier.isStarting,
+                  onRetry: _retryStartVisit,
+                ),
+              ],
               if (_locationInitialized) ...[
                 const SizedBox(height: 12),
                 VisitLocationCard(
@@ -395,11 +485,81 @@ class _VisitPageSkeleton extends StatelessWidget {
   }
 }
 
-class _TimerCard extends StatefulWidget {
-  const _TimerCard({required this.duration, required this.isActive});
+class _VisitSyncBanner extends StatelessWidget {
+  const _VisitSyncBanner({
+    required this.error,
+    required this.isRetrying,
+    required this.onRetry,
+  });
 
-  final Duration duration;
+  final String? error;
+  final bool isRetrying;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = ShadTheme.of(context);
+    final hasError = error != null && error!.trim().isNotEmpty;
+    final background = hasError
+        ? AppColors.offlineAmber.withValues(alpha: 0.14)
+        : AppColors.brandContainer.withValues(alpha: 0.65);
+    final border = hasError
+        ? AppColors.offlineAmber.withValues(alpha: 0.5)
+        : AppColors.brand.withValues(alpha: 0.3);
+    final message = hasError
+        ? error!
+        : 'Saving visit to server…';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(AppDecorations.radiusMd),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        children: [
+          if (isRetrying)
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            Icon(
+              hasError ? AppIcons.warning : AppIcons.upload,
+              size: 18,
+              color: hasError ? AppColors.offlineAmber : AppColors.brandDark,
+            ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: theme.textTheme.small.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: isRetrying ? null : onRetry,
+            child: Text(isRetrying ? 'Retrying…' : 'Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TimerCard extends StatefulWidget {
+  const _TimerCard({
+    required this.startTime,
+    required this.isActive,
+    this.isSyncing = false,
+  });
+
+  final DateTime? startTime;
   final bool isActive;
+  final bool isSyncing;
 
   @override
   State<_TimerCard> createState() => _TimerCardState();
@@ -408,6 +568,8 @@ class _TimerCard extends StatefulWidget {
 class _TimerCardState extends State<_TimerCard>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulseController;
+  Timer? _tick;
+  Duration _elapsed = Duration.zero;
 
   @override
   void initState() {
@@ -417,6 +579,7 @@ class _TimerCardState extends State<_TimerCard>
       duration: const Duration(milliseconds: 1400),
     );
     if (widget.isActive) _pulseController.repeat(reverse: true);
+    _syncTicker();
   }
 
   @override
@@ -428,10 +591,33 @@ class _TimerCardState extends State<_TimerCard>
       _pulseController.stop();
       _pulseController.value = 0;
     }
+    if (oldWidget.startTime != widget.startTime ||
+        oldWidget.isActive != widget.isActive) {
+      _syncTicker();
+    }
+  }
+
+  void _syncTicker() {
+    _tick?.cancel();
+    _tick = null;
+    if (!widget.isActive || widget.startTime == null) {
+      _elapsed = Duration.zero;
+      return;
+    }
+    void update() {
+      if (!mounted) return;
+      setState(() {
+        _elapsed = DateTime.now().difference(widget.startTime!);
+      });
+    }
+
+    update();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) => update());
   }
 
   @override
   void dispose() {
+    _tick?.cancel();
     _pulseController.dispose();
     super.dispose();
   }
@@ -495,7 +681,7 @@ class _TimerCardState extends State<_TimerCard>
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
-                        _format(widget.duration),
+                        _format(_elapsed),
                         style: theme.textTheme.h1.copyWith(
                           fontWeight: FontWeight.w800,
                           fontFeatures: const [FontFeature.tabularFigures()],
@@ -509,7 +695,11 @@ class _TimerCardState extends State<_TimerCard>
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        isActive ? 'Visit Duration' : 'Starting visit...',
+                        !isActive
+                            ? 'Starting visit...'
+                            : (widget.isSyncing
+                                ? 'Visit running · syncing…'
+                                : 'Visit Duration'),
                         style: theme.textTheme.muted.copyWith(
                           fontWeight: FontWeight.w500,
                           letterSpacing: 0.2,

@@ -47,9 +47,21 @@ def test_missing_filter_applies_before_pagination():
     )
     assert "aged.IS_MISSING = 1" in query
     assert "age_rn" in query
+    assert "av.CUSTOMERCODE = c.CUST_CODE" in query
+    assert "TRIM(TO_CHAR" not in query
     assert params["missing_threshold"] == 7
     assert params["min_row"] == 50
     assert params["search"] == "%ACME%"
+
+
+def test_stats_age_join_scopes_to_routes():
+    from app.routes.customers import _age_join_stats
+
+    sql = _age_join_stats("CUSTOMERS", "CUSTOMERAGEVIEW", "c", [":route_0", ":route_1"])
+    assert "WHERE a.CUSTOMERCODE IN" in sql
+    assert "cx.ROUTE IN (:route_0, :route_1)" in sql
+    assert "TRIM(TO_CHAR" not in sql
+    assert "av.CUSTOMERCODE = c.CUST_CODE" in sql
 
 
 def test_outstanding_uses_page_first_path():
@@ -109,3 +121,35 @@ def test_customer_columns_stable():
     assert "c.CUST_CODE" in cols
     assert "c.CREATEDSTATUS" in cols
     assert "c.CUSTOMERSTATUS" in cols
+
+
+def test_global_search_avoids_full_table_order():
+    from app.routes.customers import _build_global_search_query
+
+    query, params = _build_global_search_query(
+        "CUSTOMERS",
+        search="acme",
+        offset=0,
+        limit=12,
+    )
+    assert "ORDER BY c.CUST_NAME" not in query
+    assert "UPPER(c.CUST_CODE) LIKE :search_code" in query
+    assert "UPPER(c.CUST_NAME) LIKE :search_name" in query
+    assert params["search_code"] == "ACME%"
+    assert params["search_name"] == "%ACME%"
+    assert params["max_row"] == 12
+
+
+def test_codes_filter_uses_native_equality():
+    from app.routes.customers import _build_customer_filters
+
+    conditions, params = _build_customer_filters(
+        route="",
+        search="",
+        priority="",
+        codes=["101", "202"],
+    )
+    assert any("CUST_CODE IN" in c for c in conditions)
+    assert "TRIM(TO_CHAR" not in " ".join(conditions)
+    assert params["code0"] == "101"
+    assert params["code1"] == "202"

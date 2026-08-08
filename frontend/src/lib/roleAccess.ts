@@ -21,6 +21,7 @@ export type PortalNavKey =
   | 'tasks'
   | 'customer-requests'
   | 'product-review-report'
+  | 'work-reports'
   | 'call-center'
   | 'reports'
 

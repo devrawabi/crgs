@@ -49,6 +49,10 @@ def init_oracle_pool(app):
     """
     init_oracle_client(app)
 
+    # Applied on each acquired connection (not a create_pool kwarg).
+    call_timeout_ms = int(app.config.get("ORACLE_CALL_TIMEOUT_MS", 25000))
+    app.extensions["oracle_call_timeout_ms"] = call_timeout_ms
+
     pool_kwargs = {
         "user": app.config["ORACLE_USER"],
         "password": app.config["ORACLE_PASSWORD"],
@@ -56,7 +60,7 @@ def init_oracle_pool(app):
         "min": int(app.config.get("ORACLE_POOL_MIN", 2)),
         "max": int(app.config.get("ORACLE_POOL_MAX", 10)),
         "increment": int(app.config.get("ORACLE_POOL_INCREMENT", 1)),
-        "timeout": int(app.config.get("ORACLE_POOL_TIMEOUT", 30)),
+        "timeout": int(app.config.get("ORACLE_POOL_TIMEOUT", 15)),
         "getmode": oracledb.POOL_GETMODE_WAIT,
         # Drop stale connections so long-idle Waitress workers stay healthy.
         "ping_interval": int(app.config.get("ORACLE_POOL_PING_INTERVAL", 60)),
@@ -81,6 +85,11 @@ def init_oracle_pool(app):
     try:
         conn = pool.acquire()
         try:
+            if call_timeout_ms > 0:
+                try:
+                    conn.call_timeout = call_timeout_ms
+                except Exception:  # noqa: BLE001
+                    pass
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1 FROM DUAL")
                 cursor.fetchone()
@@ -136,6 +145,17 @@ def pool_stats():
     }
 
 
+def _apply_call_timeout(conn):
+    """Abort stuck Oracle round-trips so API workers do not hang forever."""
+    timeout_ms = int(current_app.extensions.get("oracle_call_timeout_ms") or 0)
+    if timeout_ms <= 0:
+        return
+    try:
+        conn.call_timeout = timeout_ms
+    except Exception:  # noqa: BLE001 — older clients may lack the attribute
+        logger.debug("Oracle call_timeout not supported on this connection")
+
+
 def get_connection():
     if "oracle_conn" not in g:
         pool = get_pool()
@@ -145,6 +165,7 @@ def get_connection():
             # One retry after a dead pooled connection is discarded by ping.
             logger.warning("Oracle acquire failed; retrying once")
             g.oracle_conn = pool.acquire()
+        _apply_call_timeout(g.oracle_conn)
     return g.oracle_conn
 
 

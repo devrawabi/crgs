@@ -24,6 +24,10 @@ TASK_COLUMNS = (
     "DUEDATE",
 )
 
+# Optional columns (added via migrations).
+TASK_CUSTOMERS_COLUMN = "CUSTOMERS"
+TASK_NOTES_COLUMN = "NOTES"
+
 TASK_TYPES = {
     "missing_customer_followup",
     "outstanding_collection_followup",
@@ -33,16 +37,90 @@ TASK_TYPES = {
     "own_products",
     "market_research",
     "other",
+    "other_route",
 }
 
 # Predefined types excluding free-form "other" labels.
 STANDARD_TASK_TYPES = TASK_TYPES - {"other"}
 # CRGS_TASK.TYPE is VARCHAR2(50).
 _MAX_CUSTOM_TYPE_LEN = 50
+# Live Oracle CRGS_TASK.ROUTE is VARCHAR2(20).
+_MAX_ROUTE_LEN = 20
+_MAX_CUSTOMERS_LEN = 4000
+_MAX_NOTES_LEN = 4000
+_MAX_CUSTOMER_CODES = 200
+_DEFAULT_STATUS = "PENDING"
+
+_has_customers_column: bool | None = None
+_has_notes_column: bool | None = None
 
 
 def _table_name():
     return current_app.config["ORACLE_TASKS_TABLE"]
+
+
+def _column_exists(cursor, table_name: str, column_name: str) -> bool:
+    try:
+        cursor.execute(
+            f"SELECT {column_name} FROM {table_name} WHERE ROWNUM < 1"
+        )
+        cursor.fetchall()
+        return True
+    except Exception:
+        return False
+
+
+def _table_has_customers_column(cursor, table_name: str) -> bool:
+    """Detect CRGS_TASK.CUSTOMERS (re-probe when previously False)."""
+    global _has_customers_column
+    if _has_customers_column is True:
+        return True
+    _has_customers_column = _column_exists(cursor, table_name, TASK_CUSTOMERS_COLUMN)
+    return _has_customers_column
+
+
+def _table_has_notes_column(cursor, table_name: str) -> bool:
+    """Detect CRGS_TASK.NOTES (re-probe when previously False)."""
+    global _has_notes_column
+    if _has_notes_column is True:
+        return True
+    _has_notes_column = _column_exists(cursor, table_name, TASK_NOTES_COLUMN)
+    return _has_notes_column
+
+
+def _parse_customer_codes(raw) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        parts = [str(item).strip() for item in raw]
+    else:
+        parts = [part.strip() for part in str(raw).replace(";", ",").split(",")]
+    seen: set[str] = set()
+    codes: list[str] = []
+    for part in parts:
+        if not part or part in seen:
+            continue
+        seen.add(part)
+        codes.append(part)
+        if len(codes) >= _MAX_CUSTOMER_CODES:
+            break
+    return codes
+
+
+def _format_customer_codes(codes: list[str]) -> str:
+    return ",".join(codes)
+
+
+def _customer_codes_from_payload(payload: dict) -> list[str]:
+    # Prefer customerCodes; fall back to customers when the array is missing/empty.
+    codes = _parse_customer_codes(payload.get("customerCodes"))
+    if not codes:
+        codes = _parse_customer_codes(payload.get("customers"))
+    return codes
+
+
+def _notes_from_payload(payload: dict) -> str:
+    return str(payload.get("notes") or payload.get("NOTES") or "").strip()
 
 
 def _parse_iso_date(value: str) -> datetime | None:
@@ -109,12 +187,16 @@ def _serialize_task(row: dict) -> dict:
     due = str(row.get("duedate") or "").strip()
     if due and "T" in due:
         due = due[:10]
+    customer_codes = _parse_customer_codes(row.get("customers"))
+    notes = str(row.get("notes") or "").strip()
     return {
         "type": str(row.get("type") or "").strip().lower(),
         "employeeCode": str(row.get("employeecode") or "").strip(),
         "routeNo": str(route).strip() if route is not None else "",
         "status": str(row.get("status") or "").strip().lower(),
         "dueDate": due[:10] if due else "",
+        "customerCodes": customer_codes,
+        "notes": notes,
     }
 
 
@@ -123,7 +205,6 @@ def _serialize_task(row: dict) -> dict:
 def list_tasks():
     """List tasks from CRGS_TASK (paginated)."""
     table_name = _table_name()
-    columns_sql = ", ".join(TASK_COLUMNS)
     employee_code, scope_err = resolve_employee_scope(
         request.args.get("employeeCode", "").strip()
     )
@@ -155,17 +236,23 @@ def list_tasks():
         params["tasktype"] = task_type
 
     where_sql = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-    inner_sql = f"""
-        SELECT {columns_sql}
-        FROM {table_name}
-        {where_sql}
-        ORDER BY DUEDATE DESC, EMPLOYEECODE, ROUTE
-    """
-    query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
-    params["max_row"] = offset + limit + 1
-    params["min_row"] = offset
 
     with oracle_cursor() as cursor:
+        select_cols = list(TASK_COLUMNS)
+        if _table_has_customers_column(cursor, table_name):
+            select_cols.append(TASK_CUSTOMERS_COLUMN)
+        if _table_has_notes_column(cursor, table_name):
+            select_cols.append(TASK_NOTES_COLUMN)
+        columns_sql = ", ".join(select_cols)
+        inner_sql = f"""
+            SELECT {columns_sql}
+            FROM {table_name}
+            {where_sql}
+            ORDER BY DUEDATE DESC, EMPLOYEECODE, ROUTE
+        """
+        query = rownum_page_sql(inner_sql, columns_sql=columns_sql)
+        params["max_row"] = offset + limit + 1
+        params["min_row"] = offset
         cursor.execute(query, params)
         fetched = [row_to_dict(cursor, row) for row in cursor.fetchall()]
         fetched, has_more = apply_has_more(fetched, limit)
@@ -190,6 +277,9 @@ def create_task():
     employee_code = str(payload.get("employeeCode", "")).strip()
     route_no = str(payload.get("routeNo", "")).strip()
     due_date = _parse_iso_date(payload.get("dueDate", ""))
+    customer_codes = _customer_codes_from_payload(payload)
+    customers_csv = _format_customer_codes(customer_codes)
+    notes = _notes_from_payload(payload)
 
     if type_error or not task_type:
         return jsonify({"error": type_error or "Task type is required"}), 400
@@ -197,29 +287,157 @@ def create_task():
         return jsonify({"error": "Employee code is required"}), 400
     if not route_no:
         return jsonify({"error": "Route is required"}), 400
-    if len(route_no) > 20:
-        return jsonify({"error": "Route must be 20 characters or fewer"}), 400
+    if len(route_no) > _MAX_ROUTE_LEN:
+        return jsonify(
+            {
+                "error": (
+                    f"Route must be {_MAX_ROUTE_LEN} characters or fewer "
+                    "(CRGS_TASK.ROUTE limit). Select fewer routes."
+                )
+            }
+        ), 400
     if due_date is None:
         return jsonify({"error": "Due date is required (YYYY-MM-DD)"}), 400
+    if task_type == "other_route" and not customer_codes:
+        return jsonify({"error": "Select at least one customer for Other-route"}), 400
+    if len(customers_csv) > _MAX_CUSTOMERS_LEN:
+        return jsonify({"error": "Too many customers selected"}), 400
+    if len(notes) > _MAX_NOTES_LEN:
+        return jsonify({"error": f"Notes must be {_MAX_NOTES_LEN} characters or fewer"}), 400
 
     table_name = _table_name()
+    current_app.logger.info(
+        "create_task type=%s employee=%s route=%s customers=%s notes_len=%s",
+        task_type,
+        employee_code,
+        route_no,
+        customers_csv[:200],
+        len(notes),
+    )
 
     with oracle_cursor() as cursor:
-        cursor.execute(
-            f"""
+        # Fresh probes so migrations after process start are picked up.
+        global _has_customers_column, _has_notes_column
+        _has_customers_column = None
+        _has_notes_column = None
+        has_customers = _table_has_customers_column(cursor, table_name)
+        has_notes = _table_has_notes_column(cursor, table_name)
+
+        if customer_codes and not has_customers:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "CUSTOMERS column missing on CRGS_TASK. "
+                            "Run backend/sql/alter_crgs_task_customers.sql"
+                        )
+                    }
+                ),
+                500,
+            )
+        if notes and not has_notes:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "NOTES column missing on CRGS_TASK. "
+                            "Add NOTES VARCHAR2(4000) to CRGS_TASK."
+                        )
+                    }
+                ),
+                500,
+            )
+
+        columns = ["TYPE", "EMPLOYEECODE", "ROUTE", "STATUS", "DUEDATE"]
+        values = [":type", ":employeecode", ":route", ":status", ":duedate"]
+        binds = {
+            "type": task_type,
+            "employeecode": employee_code,
+            "route": route_no,
+            "status": _DEFAULT_STATUS,
+            "duedate": due_date,
+        }
+
+        if has_customers:
+            columns.append("CUSTOMERS")
+            values.append(":customers")
+            # Always bind a value (NULL when empty) so Other-route codes are never dropped.
+            binds["customers"] = customers_csv if customers_csv else None
+
+        if has_notes:
+            columns.append("NOTES")
+            values.append(":notes")
+            binds["notes"] = notes if notes else None
+
+        sql = f"""
             INSERT INTO {table_name}
-                (TYPE, EMPLOYEECODE, ROUTE, DUEDATE)
+                ({", ".join(columns)})
             VALUES
-                (:type, :employeecode, :route, :duedate)
-            """,
-            {
-                "type": task_type,
-                "employeecode": employee_code,
-                "route": route_no,
-                "duedate": due_date,
-            },
+                ({", ".join(values)})
+        """
+        current_app.logger.info(
+            "create_task SQL columns=%s customers_bind=%r notes_bind_len=%s",
+            columns,
+            binds.get("customers"),
+            len(notes) if notes else 0,
         )
+        cursor.execute(sql, binds)
         get_connection().commit()
+
+        # Confirm the row we just wrote (match exact bind values; avoid ambiguous
+        # duplicates that lack CUSTOMERS).
+        saved_customers = customers_csv
+        saved_notes = notes
+        if has_customers:
+            cursor.execute(
+                f"""
+                SELECT CUSTOMERS, {"NOTES" if has_notes else "NULL AS NOTES"}
+                FROM {table_name}
+                WHERE LOWER(TRIM(TYPE)) = :type
+                  AND TRIM(EMPLOYEECODE) = :employeecode
+                  AND TRIM(ROUTE) = :route
+                  AND TRUNC(DUEDATE) = TRUNC(:duedate)
+                  AND (
+                        (:customers IS NULL AND CUSTOMERS IS NULL)
+                     OR TRIM(CUSTOMERS) = TRIM(:customers)
+                  )
+                """,
+                {
+                    "type": task_type,
+                    "employeecode": employee_code,
+                    "route": route_no,
+                    "duedate": due_date,
+                    "customers": customers_csv if customers_csv else None,
+                },
+            )
+            saved = cursor.fetchone()
+            if saved is None and customers_csv:
+                current_app.logger.error(
+                    "create_task insert committed but CUSTOMERS not found on row "
+                    "(type=%s employee=%s route=%s customers=%r)",
+                    task_type,
+                    employee_code,
+                    route_no,
+                    customers_csv[:200],
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "Task insert did not store CUSTOMERS. "
+                                "Confirm CUSTOMERS column exists and restart the API."
+                            )
+                        }
+                    ),
+                    500,
+                )
+            if saved is not None:
+                saved_row = row_to_dict(cursor, saved)
+                saved_customers = str(saved_row.get("customers") or "").strip()
+                if has_notes:
+                    saved_notes = str(saved_row.get("notes") or "").strip()
+
+        saved_codes = _parse_customer_codes(saved_customers)
 
     return (
         jsonify(
@@ -228,6 +446,10 @@ def create_task():
                 "employeeCode": employee_code,
                 "routeNo": route_no,
                 "dueDate": due_date.date().isoformat(),
+                "status": _DEFAULT_STATUS.lower(),
+                "customerCodes": saved_codes,
+                "customers": saved_customers,
+                "notes": saved_notes,
             }
         ),
         201,

@@ -255,8 +255,9 @@ def list_items():
     params: dict = {}
 
     if search:
-        # Avoid UPPER(TO_CHAR(...)) so TO_CHAR(ITEMCODE) / ITEMCODE indexes can help.
-        # Name keeps contains-match for UX.
+        if len(search.strip()) < 2:
+            return jsonify({"error": "search must be at least 2 characters"}), 400
+        # Code: prefix (index-friendly). Name: contains for UX, but only after min length.
         where_parts.append(
             """(
                 TO_CHAR(ITEMCODE) LIKE :search_code

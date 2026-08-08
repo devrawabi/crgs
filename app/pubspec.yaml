@@ -38,6 +38,12 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/images/
-    - assets/images/routes/
+    # Explicit list — avoids bundling launcher-icon source trees under routes/app-icon (~8MB).
+    - assets/images/avatar-dashboard-card.png
+    - assets/images/onboard-avatar-2.png
+    - assets/images/Operations-Executive-Line-Art-6-removebg-preview.png
+    - assets/images/routes/route_abu_hamur.jpg
+    - assets/images/routes/route_burgan.jpg
+    - assets/images/routes/route_al_sadd.jpg
+    - assets/images/routes/route_doha_hilal.jpg
     - assets/lottie/

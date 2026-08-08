@@ -82,8 +82,13 @@ class RoutesRepository {
 String normalizeRouteNo(String value) {
   final text = value.trim();
   if (text.isEmpty) return '';
-  final numeric = int.tryParse(text);
-  if (numeric != null) return numeric.toString();
+  final asInt = int.tryParse(text);
+  if (asInt != null) return asInt.toString();
+  // Oracle NUMBER / Decimal sometimes serializes as "18.0".
+  final asDouble = double.tryParse(text);
+  if (asDouble != null && asDouble == asDouble.roundToDouble()) {
+    return asDouble.toInt().toString();
+  }
   return text;
 }
 

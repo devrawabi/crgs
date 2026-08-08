@@ -21,11 +21,15 @@ class ApiException implements Exception {
     } else if (data is Map && data['message'] != null) {
       message = data['message'].toString();
     } else if (error.type == DioExceptionType.connectionTimeout ||
+        error.type == DioExceptionType.sendTimeout ||
         error.type == DioExceptionType.receiveTimeout) {
-      message = 'Connection timed out. Please try again.';
+      message =
+          'Connection timed out. Is the CRGS API running on this PC '
+          '(port 5318)? If using the public URL, start the Cloudflare tunnel.';
     } else if (error.type == DioExceptionType.connectionError) {
       message =
-          'Cannot reach the server. Check that the backend is running and CORS is enabled.';
+          'Cannot reach the server. Start the backend (port 5318) '
+          'or check Wi‑Fi / Cloudflare tunnel.';
     } else if (response?.statusCode == 401) {
       message = 'Session expired. Please login again.';
     } else if (response?.statusCode == 403) {

@@ -4,17 +4,23 @@
 # Hostnames:
 #   crgs.rfoodinternational.com      -> frontend (Vite :5317)
 #   crgs-api.rfoodinternational.com  -> backend  (Flask :5318)
+#
+# Credentials JSON must live next to this file (gitignored):
+#   382e5d55-e412-44e9-8e41-cee8f4ca79b4.json
 
 tunnel: 382e5d55-e412-44e9-8e41-cee8f4ca79b4
-credentials-file: D:\DiLSHAN\CRGS-Admin\CRGS-Admin\cloudflare\382e5d55-e412-44e9-8e41-cee8f4ca79b4.json
+credentials-file: 382e5d55-e412-44e9-8e41-cee8f4ca79b4.json
 
 ingress:
   - hostname: crgs.rfoodinternational.com
     service: http://127.0.0.1:5317
     originRequest:
       connectTimeout: 30s
+      noTLSVerify: false
   - hostname: crgs-api.rfoodinternational.com
     service: http://127.0.0.1:5318
     originRequest:
       connectTimeout: 30s
+      # Visit/login can wait on Oracle — keep origin read generous.
+      httpHostHeader: crgs-api.rfoodinternational.com
   - service: http_status:404

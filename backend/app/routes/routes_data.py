@@ -133,6 +133,10 @@ def list_routes():
         for item in data:
             if item.get("routeno") is not None:
                 item["routeno"] = str(item["routeno"]).strip()
+            if item.get("routename") is not None:
+                item["routename"] = str(item["routename"]).strip()
+            else:
+                item["routename"] = ""
 
     payload = {
         "count": len(data),

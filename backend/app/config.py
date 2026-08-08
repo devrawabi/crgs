@@ -40,12 +40,14 @@ class Config:
     ORACLE_POOL_MIN = int(os.getenv("ORACLE_POOL_MIN", "4"))
     ORACLE_POOL_MAX = int(os.getenv("ORACLE_POOL_MAX", "16"))
     ORACLE_POOL_INCREMENT = int(os.getenv("ORACLE_POOL_INCREMENT", "2"))
-    ORACLE_POOL_TIMEOUT = int(os.getenv("ORACLE_POOL_TIMEOUT", "30"))
+    ORACLE_POOL_TIMEOUT = int(os.getenv("ORACLE_POOL_TIMEOUT", "15"))
     ORACLE_POOL_PING_INTERVAL = int(os.getenv("ORACLE_POOL_PING_INTERVAL", "60"))
     # Recycle pooled sessions after N seconds (0 disables). Avoids stale listeners.
     ORACLE_POOL_MAX_LIFETIME = int(os.getenv("ORACLE_POOL_MAX_LIFETIME", "3600"))
     ORACLE_STMT_CACHE_SIZE = int(os.getenv("ORACLE_STMT_CACHE_SIZE", "30"))
     ORACLE_CURSOR_ARRAYSIZE = int(os.getenv("ORACLE_CURSOR_ARRAYSIZE", "500"))
+    # Abort individual Oracle calls after N ms (0 = disabled). Prevents API hangs.
+    ORACLE_CALL_TIMEOUT_MS = int(os.getenv("ORACLE_CALL_TIMEOUT_MS", "25000"))
     ORACLE_ROUTES_TABLE = os.getenv("ORACLE_ROUTES_TABLE", "TBLROUTES")
     ORACLE_LOGIN_USERS_TABLE = os.getenv("ORACLE_LOGIN_USERS_TABLE", "CRGS_USER")
     ORACLE_DESIGNATION_TABLE = os.getenv(
@@ -76,6 +78,9 @@ class Config:
     )
     ORACLE_MARKETRESEARCH_TABLE = os.getenv(
         "ORACLE_MARKETRESEARCH_TABLE", "CRGS_MARKETRESEARCH"
+    )
+    ORACLE_WORKREPORT_TABLE = os.getenv(
+        "ORACLE_WORKREPORT_TABLE", "CRGS_WORKREPORT"
     )
     ORACLE_CLIENT_LIB_DIR = os.getenv("ORACLE_CLIENT_LIB_DIR", "")
 

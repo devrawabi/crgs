@@ -3,6 +3,7 @@ import {
   useContext,
   useState,
   useCallback,
+  useMemo,
   type ReactNode,
 } from 'react'
 import { parseRouteColumn } from '../api/users'
@@ -17,17 +18,6 @@ import type {
   Task,
   MarketIntel,
 } from '../types'
-import {
-  initialUsers,
-  initialRoutes,
-  initialCustomers,
-  initialSalesTargets,
-  initialProductTargets,
-  initialCustomerTargets,
-  initialProducts,
-  initialTasks,
-  initialMarketIntel,
-} from '../data/mockData'
 
 interface AppContextValue {
   users: User[]
@@ -70,15 +60,16 @@ function generateId(prefix: string) {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [users, setUsers] = useState(initialUsers)
-  const [routes, setRoutes] = useState(initialRoutes)
-  const [customers, setCustomers] = useState(initialCustomers)
-  const [salesTargets, setSalesTargets] = useState(initialSalesTargets)
-  const [productTargets, setProductTargets] = useState(initialProductTargets)
-  const [customerTargets, setCustomerTargets] = useState(initialCustomerTargets)
-  const [products] = useState(initialProducts)
-  const [tasks, setTasks] = useState(initialTasks)
-  const [marketIntel] = useState(initialMarketIntel)
+  // Start empty — pages hydrate from the API. Avoid shipping mock seed data in memory.
+  const [users, setUsers] = useState<User[]>([])
+  const [routes, setRoutes] = useState<Route[]>([])
+  const [customers, setCustomers] = useState<Customer[]>([])
+  const [salesTargets, setSalesTargets] = useState<SalesTarget[]>([])
+  const [productTargets, setProductTargets] = useState<ProductTarget[]>([])
+  const [customerTargets, setCustomerTargets] = useState<CustomerTarget[]>([])
+  const [products] = useState<Product[]>([])
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [marketIntel] = useState<MarketIntel[]>([])
 
   const addUser = useCallback((user: Omit<User, 'id' | 'createdAt'>) => {
     setUsers((prev) => [
@@ -276,40 +267,66 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)))
   }, [])
 
-  return (
-    <AppContext.Provider
-      value={{
-        users,
-        routes,
-        customers,
-        salesTargets,
-        productTargets,
-        customerTargets,
-        products,
-        tasks,
-        marketIntel,
-        addUser,
-        updateUser,
-        toggleUserStatus,
-        addRoute,
-        updateRoute,
-        assignCustomerToRoute,
-        assignCustomersToExecutive,
-        assignRoutesToExecutive,
-        assignRoutesByEmployeeCode,
-        syncExecutivesFromDb,
-        getUserByEmployeeCode,
-        reassignCustomer,
-        addSalesTarget,
-        addProductTarget,
-        addCustomerTarget,
-        addTask,
-        updateTask,
-      }}
-    >
-      {children}
-    </AppContext.Provider>
+  const value = useMemo(
+    () => ({
+      users,
+      routes,
+      customers,
+      salesTargets,
+      productTargets,
+      customerTargets,
+      products,
+      tasks,
+      marketIntel,
+      addUser,
+      updateUser,
+      toggleUserStatus,
+      addRoute,
+      updateRoute,
+      assignCustomerToRoute,
+      assignCustomersToExecutive,
+      assignRoutesToExecutive,
+      assignRoutesByEmployeeCode,
+      syncExecutivesFromDb,
+      getUserByEmployeeCode,
+      reassignCustomer,
+      addSalesTarget,
+      addProductTarget,
+      addCustomerTarget,
+      addTask,
+      updateTask,
+    }),
+    [
+      users,
+      routes,
+      customers,
+      salesTargets,
+      productTargets,
+      customerTargets,
+      products,
+      tasks,
+      marketIntel,
+      addUser,
+      updateUser,
+      toggleUserStatus,
+      addRoute,
+      updateRoute,
+      assignCustomerToRoute,
+      assignCustomersToExecutive,
+      assignRoutesToExecutive,
+      assignRoutesByEmployeeCode,
+      syncExecutivesFromDb,
+      getUserByEmployeeCode,
+      reassignCustomer,
+      addSalesTarget,
+      addProductTarget,
+      addCustomerTarget,
+      addTask,
+      updateTask,
+    ]
   )
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
 
 export function useApp() {

@@ -825,6 +825,7 @@ class TaskModel {
     this.routeName,
     this.taskTypeCode = '',
     this.employeeCode = '',
+    this.customerCodes = const [],
   });
 
   final String id;
@@ -842,10 +843,13 @@ class TaskModel {
   /// Oracle `CRGS_TASK.TYPE` value (e.g. missing_customer_followup).
   final String taskTypeCode;
   final String employeeCode;
+  /// Assigned customer codes (Other-route tasks).
+  final List<String> customerCodes;
 
   TaskModel copyWith({
     TaskStatus? status,
     String? notes,
+    List<String>? customerCodes,
   }) {
     return TaskModel(
       id: id,
@@ -862,6 +866,7 @@ class TaskModel {
       routeName: routeName,
       taskTypeCode: taskTypeCode,
       employeeCode: employeeCode,
+      customerCodes: customerCodes ?? this.customerCodes,
     );
   }
 
@@ -874,6 +879,7 @@ class TaskModel {
     final routeName = routeNo.isEmpty ? null : 'Route $routeNo';
     final dueDateRaw = (json['dueDate']?.toString() ?? '').trim();
     final dueDate = DateTime.tryParse(dueDateRaw) ?? DateTime.now();
+    final customerCodes = _parseCustomerCodes(json['customerCodes']);
 
     return TaskModel(
       id: [typeCode, employeeCode, routeNo, dueDateRaw]
@@ -889,7 +895,25 @@ class TaskModel {
       routeName: routeName,
       taskTypeCode: typeCode,
       employeeCode: employeeCode,
+      customerCodes: customerCodes,
+      customerId: customerCodes.isNotEmpty ? customerCodes.first : null,
     );
+  }
+
+  static List<String> _parseCustomerCodes(dynamic raw) {
+    if (raw is List) {
+      return raw
+          .map((item) => item?.toString().trim() ?? '')
+          .where((code) => code.isNotEmpty)
+          .toList(growable: false);
+    }
+    if (raw == null) return const [];
+    return raw
+        .toString()
+        .split(RegExp(r'[,;]'))
+        .map((part) => part.trim())
+        .where((code) => code.isNotEmpty)
+        .toList(growable: false);
   }
 
   static String _dbTaskTitle(String typeCode) => switch (typeCode) {
@@ -901,6 +925,7 @@ class TaskModel {
         'own_products' => 'Own Products',
         'market_research' => 'Market Research',
         'other' => 'Other',
+        'other_route' => 'Other-route',
         _ => typeCode.isEmpty
             ? 'Task'
             : typeCode
@@ -926,6 +951,8 @@ class TaskModel {
         'own_products' => 'Push own products with customers on the route',
         'market_research' => 'Gather market research on the assigned route',
         'other' => 'Complete the assigned task on the route',
+        'other_route' =>
+          'Complete the assigned task on the selected route',
         _ => 'Complete the assigned task on the route',
       };
 
@@ -1128,6 +1155,30 @@ class VisitRecordModel {
       reason: json['reason']?.toString().trim() ?? '',
       remarks: json['remarks']?.toString().trim() ?? '',
       followUp: json['followUp']?.toString().trim() ?? '',
+    );
+  }
+}
+
+/// Extra work done outside an assigned task (`CRGS_WORKREPORT`).
+class WorkReportModel {
+  const WorkReportModel({
+    required this.employeeCode,
+    this.customerName = '',
+    required this.notes,
+    this.createdAt = '',
+  });
+
+  final String employeeCode;
+  final String customerName;
+  final String notes;
+  final String createdAt;
+
+  factory WorkReportModel.fromJson(Map<String, dynamic> json) {
+    return WorkReportModel(
+      employeeCode: json['employeeCode']?.toString().trim() ?? '',
+      customerName: json['customerName']?.toString().trim() ?? '',
+      notes: json['notes']?.toString().trim() ?? '',
+      createdAt: json['createdAt']?.toString().trim() ?? '',
     );
   }
 }

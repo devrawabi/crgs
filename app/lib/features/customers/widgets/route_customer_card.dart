@@ -13,10 +13,14 @@ class RouteCustomerCard extends StatelessWidget {
     super.key,
     required this.customer,
     required this.onTap,
+    this.highlighted = false,
+    this.highlightLabel = 'Task',
   });
 
   final CustomerModel customer;
   final VoidCallback onTap;
+  final bool highlighted;
+  final String highlightLabel;
 
   String _missingLabel(CustomerModel customer) {
     final date = customer.lastPurchaseDate;
@@ -46,9 +50,16 @@ class RouteCustomerCard extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: theme.colorScheme.card,
+            color: highlighted
+                ? AppColors.accent.withValues(alpha: 0.08)
+                : theme.colorScheme.card,
             borderRadius: BorderRadius.circular(AppDecorations.radiusMd),
-            border: Border.all(color: theme.colorScheme.border),
+            border: Border.all(
+              color: highlighted
+                  ? AppColors.accent.withValues(alpha: 0.85)
+                  : theme.colorScheme.border,
+              width: highlighted ? 2 : 1,
+            ),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -72,6 +83,29 @@ class RouteCustomerCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 8),
+                        if (highlighted) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.accent.withValues(alpha: 0.95),
+                              borderRadius: BorderRadius.circular(
+                                AppDecorations.radiusPill,
+                              ),
+                            ),
+                            child: Text(
+                              highlightLabel,
+                              style: theme.textTheme.small.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
                         PriorityBadge(priority: customer.priority),
                       ],
                     ),

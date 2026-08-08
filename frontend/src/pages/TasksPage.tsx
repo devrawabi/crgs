@@ -19,7 +19,13 @@ import {
 } from '../api/users'
 import { createTask, deleteTask, fetchTasks, type DbTask } from '../api/tasks'
 import { AssignedRoutesMultiSelect } from '../components/ui/AssignedRoutesMultiSelect'
+import { CustomersMultiSelect } from '../components/ui/CustomersMultiSelect'
 import { RouteTargetCell } from '../components/ui/RouteTargetCell'
+import {
+  LoadMoreButton,
+  TableEmptyRow,
+  TableLoadingRow,
+} from '../components/ui/LoadingState'
 
 function isActiveExecutive(flag: string): boolean {
   return (flag ?? '').trim().toUpperCase() === 'A'
@@ -58,6 +64,7 @@ const TASK_TYPES: { value: TaskType; label: string }[] = [
   { value: 'own_products', label: 'Own Products' },
   { value: 'market_research', label: 'Market Research' },
   { value: 'other', label: 'Other' },
+  { value: 'other_route', label: 'Other-route' },
 ]
 
 const EMPTY_FORM = {
@@ -65,6 +72,7 @@ const EMPTY_FORM = {
   otherType: '',
   employeeCode: '',
   routeNos: [] as string[],
+  customerCodes: [] as string[],
   dueDate: '',
   notes: '',
 }
@@ -92,6 +100,8 @@ export function TasksPage() {
   const TASK_PAGE_SIZE = 100
 
   const [form, setForm] = useState(EMPTY_FORM)
+
+  const isOtherRoute = form.type === 'other_route'
 
   const activeExecutives = useMemo(
     () => dbExecutives.filter((e) => isActiveExecutive(e.flag)),
@@ -192,6 +202,8 @@ export function TasksPage() {
     [getAssignedRoutes, selectedEmployeeCode]
   )
 
+  const routeOptions = isOtherRoute ? dbRoutes : assignedRoutes
+
   const filteredTasks = dbTasks
 
   const getExecutiveNameByCode = (employeeCode: string) => {
@@ -250,34 +262,76 @@ export function TasksPage() {
       setFormError('Select an executive')
       return
     }
-    if (assignedRoutes.length > 0 && form.routeNos.length === 0) {
-      setFormError('Select at least one route')
-      return
-    }
-    if (form.routeNos.length === 0) {
-      setFormError('Route is required')
-      return
+    if (isOtherRoute) {
+      if (form.routeNos.length === 0) {
+        setFormError('Select at least one route')
+        return
+      }
+      if (form.customerCodes.length === 0) {
+        setFormError('Select at least one customer')
+        return
+      }
+    } else {
+      if (assignedRoutes.length > 0 && form.routeNos.length === 0) {
+        setFormError('Select at least one route')
+        return
+      }
+      if (form.routeNos.length === 0) {
+        setFormError('Route is required')
+        return
+      }
     }
 
     setSubmitting(true)
     try {
+      const routeNo = formatRouteColumn(form.routeNos)
+      if (routeNo.length > 20) {
+        setFormError(
+          'Selected routes are too long for CRGS_TASK.ROUTE (max 20 characters). Select fewer routes.'
+        )
+        setSubmitting(false)
+        return
+      }
+
       // Other → CRGS_TASK.TYPE = Other Type text (via type + otherType).
+      const base = {
+        employeeCode: selectedEmployeeCode,
+        routeNo,
+        dueDate: form.dueDate,
+        notes: form.notes.trim() || undefined,
+      }
+
       const payload =
         form.type === 'other'
           ? {
               type: 'other' as const,
               otherType: customType,
-              employeeCode: selectedEmployeeCode,
-              routeNo: formatRouteColumn(form.routeNos),
-              dueDate: form.dueDate,
+              ...base,
             }
-          : {
-              type: form.type,
-              employeeCode: selectedEmployeeCode,
-              routeNo: formatRouteColumn(form.routeNos),
-              dueDate: form.dueDate,
-            }
-      await createTask(payload)
+          : form.type === 'other_route'
+            ? {
+                type: form.type,
+                ...base,
+                customerCodes: form.customerCodes,
+                // Fallback string form so backend always receives customers.
+                customers: form.customerCodes.join(','),
+              }
+            : {
+                type: form.type,
+                ...base,
+              }
+
+      const created = await createTask(payload)
+      if (form.type === 'other_route') {
+        const savedCodes = created.customerCodes ?? []
+        if (savedCodes.length === 0) {
+          setFormError(
+            'Task was created but CUSTOMERS was not stored. Restart the API and try again.'
+          )
+          await loadTasks()
+          return
+        }
+      }
       await loadTasks()
       setForm(EMPTY_FORM)
       setModalOpen(false)
@@ -338,17 +392,9 @@ export function TasksPage() {
           ]}
         >
           {tasksLoading ? (
-            <tr>
-              <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
-                Loading tasks...
-              </td>
-            </tr>
+            <TableLoadingRow colSpan={6} label="Loading tasks..." />
           ) : filteredTasks.length === 0 ? (
-            <tr>
-              <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
-                No tasks found
-              </td>
-            </tr>
+            <TableEmptyRow colSpan={6} label="No tasks found" />
           ) : (
             filteredTasks.map((task, index) => {
               const key = taskKey(task, index)
@@ -389,18 +435,12 @@ export function TasksPage() {
             })
           )}
         </Table>
-        {tasksHasMore && (
-          <div className="mt-4 flex justify-center">
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={tasksLoadingMore || tasksLoading}
-              onClick={loadMoreTasks}
-            >
-              {tasksLoadingMore ? 'Loading…' : 'Load more tasks'}
-            </Button>
-          </div>
-        )}
+        <LoadMoreButton
+          hasMore={tasksHasMore}
+          loading={tasksLoadingMore || tasksLoading}
+          onClick={loadMoreTasks}
+          label="Load more tasks"
+        />
       </Card>
 
       <Modal
@@ -429,6 +469,8 @@ export function TasksPage() {
                   ...form,
                   type,
                   otherType: type === 'other' ? form.otherType : '',
+                  routeNos: [],
+                  customerCodes: [],
                 })
               }}
             >
@@ -458,7 +500,12 @@ export function TasksPage() {
               className={selectClass}
               value={form.employeeCode}
               onChange={(e) =>
-                setForm({ ...form, employeeCode: e.target.value, routeNos: [] })
+                setForm({
+                  ...form,
+                  employeeCode: e.target.value,
+                  routeNos: isOtherRoute ? form.routeNos : [],
+                  customerCodes: isOtherRoute ? form.customerCodes : [],
+                })
               }
               required
               disabled={executivesLoading}
@@ -474,15 +521,44 @@ export function TasksPage() {
               ))}
             </select>
           </FormField>
-          <FormField label="Assigned Routes" required>
+          <FormField
+            label={isOtherRoute ? 'Routes' : 'Assigned Routes'}
+            required
+          >
             <AssignedRoutesMultiSelect
               employeeCode={selectedEmployeeCode}
               routesLoading={routesLoading}
-              assignedRoutes={assignedRoutes}
+              assignedRoutes={routeOptions}
               value={form.routeNos}
-              onChange={(routeNos) => setForm({ ...form, routeNos })}
+              onChange={(routeNos) =>
+                setForm((prev) => ({
+                  ...prev,
+                  routeNos,
+                  customerCodes: [],
+                }))
+              }
+              allowWithoutEmployee={isOtherRoute}
+              emptyMessage={
+                isOtherRoute ? 'No routes available' : 'No routes assigned'
+              }
+              placeholderWhenReady={
+                isOtherRoute
+                  ? 'Search or select routes...'
+                  : 'Search or select routes...'
+              }
             />
           </FormField>
+          {isOtherRoute && (
+            <FormField label="Customers" required>
+              <CustomersMultiSelect
+                routeNos={form.routeNos}
+                value={form.customerCodes}
+                onChange={(customerCodes) =>
+                  setForm((prev) => ({ ...prev, customerCodes }))
+                }
+              />
+            </FormField>
+          )}
           <FormField label="Due Date" required>
             <input
               type="date"

@@ -11,6 +11,25 @@ from typing import Any
 _lock = threading.Lock()
 _store: dict[str, tuple[float, Any]] = {}
 
+# Hard cap so a burst of unique keys cannot grow without bound.
+_MAX_ENTRIES = 512
+
+
+def _evict_expired_unlocked(now: float) -> None:
+    expired = [key for key, (expires_at, _) in _store.items() if expires_at < now]
+    for key in expired:
+        _store.pop(key, None)
+
+
+def _evict_overflow_unlocked() -> None:
+    """Drop soonest-to-expire entries when over capacity."""
+    overflow = len(_store) - _MAX_ENTRIES
+    if overflow <= 0:
+        return
+    by_expiry = sorted(_store.items(), key=lambda item: item[1][0])
+    for key, _ in by_expiry[:overflow]:
+        _store.pop(key, None)
+
 
 def cache_get(key: str) -> Any | None:
     now = time.monotonic()
@@ -28,8 +47,11 @@ def cache_get(key: str) -> Any | None:
 def cache_set(key: str, value: Any, *, ttl_seconds: float) -> None:
     if ttl_seconds <= 0:
         return
+    now = time.monotonic()
     with _lock:
-        _store[key] = (time.monotonic() + ttl_seconds, value)
+        _evict_expired_unlocked(now)
+        _store[key] = (now + ttl_seconds, value)
+        _evict_overflow_unlocked()
 
 
 def cache_delete_prefix(prefix: str) -> None:
