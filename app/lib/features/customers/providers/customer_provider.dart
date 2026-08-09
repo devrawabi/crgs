@@ -48,7 +48,10 @@ class CustomerFilter {
     final missingKey = priority == CustomerPriority.missing
         ? missingDays.toString()
         : '-';
-    return '${routeId ?? ''}|$priorityKey|$missingKey|${searchQuery.trim()}';
+    // outv2: Outstanding folds CASHCUSTOMERBALANCE dues (bust credit-only caches).
+    final balanceKey =
+        priority == CustomerPriority.outstanding ? 'outv2' : '-';
+    return '${routeId ?? ''}|$priorityKey|$missingKey|$balanceKey|${searchQuery.trim()}';
   }
 
   bool affectsCustomerList(CustomerFilter other) {

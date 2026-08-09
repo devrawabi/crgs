@@ -53,6 +53,13 @@ _AGE_SELECT = (
 # Stats / outstanding only need these customer columns (keeps age join lighter).
 _STATS_CUSTOMER_COLUMNS = ("CUST_CODE", "CREDIT_AMOUNT", "CUSTOMERSTATUS")
 
+# Credit dues live on CUSTOMERS; cash dues on CASHCUSTOMERBALANCE (OUTSTANDING).
+_OUTSTANDING_CONDITION = (
+    "(UPPER(c.CUSTOMERSTATUS) LIKE '%OUT%' "
+    "OR NVL(c.CREDIT_AMOUNT, 0) > 0 "
+    "OR NVL(cb.OUTSTANDING, 0) > 0)"
+)
+
 
 def _age_join(age_view: str, customer_alias: str = "c") -> str:
     """
@@ -172,16 +179,21 @@ def _priority_condition(priority: str) -> str | None:
     if normalized == "missing":
         return _MISSING_CONDITION
     if normalized == "outstanding":
-        return (
-            "(UPPER(c.CUSTOMERSTATUS) LIKE '%OUT%' "
-            "OR NVL(c.CREDIT_AMOUNT, 0) > 0)"
-        )
+        return _OUTSTANDING_CONDITION
     return None
 
 
 def _needs_age_before_page(priority: str) -> bool:
     """Missing filter depends on BILLDATE, so the age join must happen before ROWNUM."""
     return priority.strip().lower() == "missing"
+
+
+def _cash_balance_join(cash_view: str, customer_alias: str = "c") -> str:
+    """LEFT JOIN cash dues. Both CUST_CODE and CUSTOMERCODE are NUMBER."""
+    return (
+        f" LEFT JOIN {cash_view} cb"
+        f" ON cb.CUSTOMERCODE = {customer_alias}.CUST_CODE"
+    )
 
 
 def _build_customer_filters(
@@ -220,7 +232,7 @@ def _build_customer_filters(
 
     priority_condition = _priority_condition(priority)
     if priority_condition and _needs_age_before_page(priority):
-        # Outstanding is applied on the customers table alone (see page-first path).
+        # Outstanding is applied on the page-first path (with cash join).
         conditions.append(priority_condition)
 
     return conditions, params
@@ -228,6 +240,31 @@ def _build_customer_filters(
 
 def _customer_columns_sql(alias: str = "c") -> str:
     return ", ".join(f"{alias}.{column}" for column in CUSTOMER_COLUMNS)
+
+
+def _customer_columns_with_cash_balance(
+    customer_alias: str = "c", cash_alias: str = "cb"
+) -> str:
+    """
+    Project master columns, folding cash OUTSTANDING / CREDITLIMIT into the
+    existing CREDIT_AMOUNT / CREDIT_LIMIT JSON keys the Flutter app already maps.
+    """
+    parts: list[str] = []
+    for column in CUSTOMER_COLUMNS:
+        if column == "CREDIT_AMOUNT":
+            parts.append(
+                f"(NVL({customer_alias}.CREDIT_AMOUNT, 0) + "
+                f"NVL({cash_alias}.OUTSTANDING, 0)) AS CREDIT_AMOUNT"
+            )
+        elif column == "CREDIT_LIMIT":
+            parts.append(
+                f"CASE WHEN NVL({customer_alias}.CREDIT_LIMIT, 0) > 0 "
+                f"THEN {customer_alias}.CREDIT_LIMIT "
+                f"ELSE NVL({cash_alias}.CREDITLIMIT, 0) END AS CREDIT_LIMIT"
+            )
+        else:
+            parts.append(f"{customer_alias}.{column}")
+    return ", ".join(parts)
 
 
 def _stats_customer_columns_sql(alias: str = "c") -> str:
@@ -244,9 +281,10 @@ def _build_page_first_query(
     missing_days: int,
     offset: int,
     limit: int,
+    cash_view: str = "",
 ) -> tuple[str, dict]:
     """
-    Filter + ORDER + ROWNUM on CUSTOMERS only.
+    Filter + ORDER + ROWNUM on CUSTOMERS (Outstanding also joins cash dues).
 
     All and Outstanding do not use last-purchase data to decide membership.
     Avoiding CUSTOMERAGEVIEW here keeps the common list path index-friendly
@@ -260,11 +298,16 @@ def _build_page_first_query(
     params["max_row"] = offset + limit
     params["min_row"] = offset
 
-    if priority.strip().lower() == "outstanding":
-        conditions.append(
-            "(UPPER(c.CUSTOMERSTATUS) LIKE '%OUT%' "
-            "OR NVL(c.CREDIT_AMOUNT, 0) > 0)"
-        )
+    is_outstanding = priority.strip().lower() == "outstanding"
+    cash_join = ""
+    select_inner = _customer_columns_sql("c")
+
+    if is_outstanding:
+        if not cash_view:
+            raise ValueError("cash_view is required for outstanding list queries")
+        conditions.append(_OUTSTANDING_CONDITION)
+        cash_join = _cash_balance_join(cash_view, "c")
+        select_inner = _customer_columns_with_cash_balance("c", "cb")
 
     where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -282,8 +325,9 @@ def _build_page_first_query(
             FROM (
                 SELECT inner_query.*, ROWNUM AS rnum
                 FROM (
-                    SELECT {_customer_columns_sql("c")}
+                    SELECT {select_inner}
                     FROM {view_name} c
+                    {cash_join}
                     {where_sql}
                     ORDER BY c.CUST_NAME
                 ) inner_query
@@ -306,12 +350,14 @@ def _build_age_first_query(
     missing_days: int,
     offset: int,
     limit: int,
+    cash_view: str = "",
 ) -> tuple[str, dict]:
     """
     Filter the route (and search) on CUSTOMERS first, then join age and apply
     the missing predicate before ROWNUM. Avoids joining the age view to the
     entire customers table.
     """
+    del cash_view  # Missing path does not need cash dues.
     conditions, params = _build_customer_filters(
         route=route,
         search=search,
@@ -379,6 +425,7 @@ def _build_list_query(
     missing_days: int,
     offset: int,
     limit: int,
+    cash_view: str = "",
 ) -> tuple[str, dict]:
     if _needs_age_before_page(priority):
         return _build_age_first_query(
@@ -390,6 +437,7 @@ def _build_list_query(
             missing_days=missing_days,
             offset=offset,
             limit=limit,
+            cash_view=cash_view,
         )
     return _build_page_first_query(
         view_name,
@@ -400,6 +448,7 @@ def _build_list_query(
         missing_days=missing_days,
         offset=offset,
         limit=limit,
+        cash_view=cash_view,
     )
 
 
@@ -453,9 +502,15 @@ def _build_global_search_query(
 
 
 def _fetch_route_stats(
-    view_name: str, age_view: str, route: str, missing_days: int
+    view_name: str,
+    age_view: str,
+    route: str,
+    missing_days: int,
+    cash_view: str,
 ) -> dict:
-    by_route = _fetch_routes_stats(view_name, age_view, [route], missing_days)
+    by_route = _fetch_routes_stats(
+        view_name, age_view, [route], missing_days, cash_view
+    )
     return by_route.get(str(route).strip(), {"all": 0, "missing": 0, "outstanding": 0})
 
 
@@ -470,6 +525,7 @@ def _fetch_routes_stats(
     age_view: str,
     routes: list[str],
     missing_days: int,
+    cash_view: str,
 ) -> dict[str, dict]:
     """Aggregate all / missing / outstanding counts grouped by route."""
     cleaned = [str(r).strip() for r in routes if str(r).strip()]
@@ -477,7 +533,7 @@ def _fetch_routes_stats(
         return {}
 
     cache_key = (
-        f"customer_stats:{view_name}:{age_view}:{missing_days}:"
+        f"customer_stats:{view_name}:{age_view}:{cash_view}:{missing_days}:"
         + ",".join(sorted(cleaned))
     )
     cached = cache_get(cache_key)
@@ -498,7 +554,7 @@ def _fetch_routes_stats(
             route_binds.append(f":{key}")
             params[key] = _bind_route(route)
 
-        # Route-scoped age join + equality keeps COUNT DISTINCT cheap.
+        # Route-scoped age + cash joins; outstanding includes credit and cash dues.
         query = f"""
             SELECT
                 TO_CHAR(c.ROUTE) AS route_no,
@@ -511,10 +567,7 @@ def _fetch_routes_stats(
                 ) AS missing,
                 COUNT(
                     DISTINCT CASE
-                        WHEN (
-                            UPPER(c.CUSTOMERSTATUS) LIKE '%OUT%'
-                            OR NVL(c.CREDIT_AMOUNT, 0) > 0
-                        ) THEN c.CUST_CODE
+                        WHEN {_OUTSTANDING_CONDITION} THEN c.CUST_CODE
                         ELSE NULL
                     END
                 ) AS outstanding
@@ -524,6 +577,7 @@ def _fetch_routes_stats(
                 WHERE c.ROUTE IN ({", ".join(route_binds)})
             ) c
             {_age_join_stats(view_name, age_view, "c", route_binds)}
+            {_cash_balance_join(cash_view, "c")}
             GROUP BY c.ROUTE
         """
         with oracle_cursor() as cursor:
@@ -806,6 +860,7 @@ def customer_stats():
     routes_param = request.args.get("routes", "").strip()
     view_name = current_app.config["ORACLE_CUSTOMERS_VIEW"]
     age_view = current_app.config["ORACLE_CUSTOMER_AGE_VIEW"]
+    cash_view = current_app.config["ORACLE_CASH_CUSTOMER_BALANCE_VIEW"]
     default_missing_days = current_app.config["MISSING_DAYS"]
     missing_days = max(int(request.args.get("missing_days", default_missing_days)), 0)
 
@@ -816,7 +871,9 @@ def customer_stats():
             return jsonify({"error": "routes is required"}), 400
         if len(routes) > 200:
             return jsonify({"error": "Too many routes (max 200)"}), 400
-        by_route = _fetch_routes_stats(view_name, age_view, routes, missing_days)
+        by_route = _fetch_routes_stats(
+            view_name, age_view, routes, missing_days, cash_view
+        )
         return jsonify(
             {
                 "missing_days": missing_days,
@@ -834,7 +891,9 @@ def customer_stats():
         {
             "route": route,
             "missing_days": missing_days,
-            "stats": _fetch_route_stats(view_name, age_view, route, missing_days),
+            "stats": _fetch_route_stats(
+                view_name, age_view, route, missing_days, cash_view
+            ),
         }
     )
 
@@ -1221,6 +1280,7 @@ def update_customer(cust_code: str):
 def list_customers():
     view_name = current_app.config["ORACLE_CUSTOMERS_VIEW"]
     age_view = current_app.config["ORACLE_CUSTOMER_AGE_VIEW"]
+    cash_view = current_app.config["ORACLE_CASH_CUSTOMER_BALANCE_VIEW"]
     default_missing_days = current_app.config["MISSING_DAYS"]
     route = request.args.get("route", "").strip()
     search = request.args.get("search", "").strip()
@@ -1275,6 +1335,7 @@ def list_customers():
         params["max_row"] = offset + fetch_limit
         params["min_row"] = offset
         where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        # Fold cash dues so visit/task lookups show the same Due as Outstanding.
         paginated_query = f"""
             SELECT {_customer_columns_sql("paged")},
                    NULL AS LAST_PURCHASE_DATE,
@@ -1289,8 +1350,9 @@ def list_customers():
                 FROM (
                     SELECT inner_query.*, ROWNUM AS rnum
                     FROM (
-                        SELECT {_customer_columns_sql("c")}
+                        SELECT {_customer_columns_with_cash_balance("c", "cb")}
                         FROM {view_name} c
+                        {_cash_balance_join(cash_view, "c")}
                         {where_sql}
                         ORDER BY c.CUST_NAME
                     ) inner_query
@@ -1318,6 +1380,7 @@ def list_customers():
             missing_days=missing_days,
             offset=offset,
             limit=fetch_limit,
+            cash_view=cash_view,
         )
 
     with oracle_cursor() as cursor:

@@ -74,13 +74,34 @@ def test_outstanding_uses_page_first_path():
         missing_days=30,
         offset=0,
         limit=50,
+        cash_view="CASHCUSTOMERBALANCE",
     )
     assert "LIKE '%OUT%'" in query
     assert "CREDIT_AMOUNT" in query
+    assert "CASHCUSTOMERBALANCE" in query
+    assert "cb.CUSTOMERCODE = c.CUST_CODE" in query
+    assert "NVL(cb.OUTSTANDING, 0) > 0" in query
+    assert "NVL(cb.OUTSTANDING, 0)) AS CREDIT_AMOUNT" in query
+    assert "cb.CREDITLIMIT" in query
     assert "aged.IS_MISSING" not in query
     assert "CUSTOMERAGEVIEW" not in query
     assert "missing_threshold" not in params
 
+
+def test_outstanding_requires_cash_view():
+    import pytest
+
+    with pytest.raises(ValueError, match="cash_view"):
+        _build_list_query(
+            "CUSTOMERS",
+            "CUSTOMERAGEVIEW",
+            route="12",
+            search="",
+            priority="outstanding",
+            missing_days=30,
+            offset=0,
+            limit=50,
+        )
 
 def test_four_month_missing_window_binds_120_days():
     """UI '4 months' chip maps to missing_days=120 and still filters before ROWNUM."""

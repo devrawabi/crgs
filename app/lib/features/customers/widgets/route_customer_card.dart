@@ -39,6 +39,7 @@ class RouteCustomerCard extends StatelessWidget {
 
     final metaParts = <String>[
       if (customer.id.isNotEmpty) customer.id,
+      if (customer.contactPerson.isNotEmpty) customer.contactPerson,
       if (customer.mobile.isNotEmpty) customer.mobile,
       if (customer.category.isNotEmpty) customer.category,
     ];
