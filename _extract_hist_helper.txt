@@ -1,0 +1,37 @@
+def _fetch_last_purchase_row(billhdr_table: str, cust_code: str) -> dict | None:
+    rows = _fetch_bill_history_rows(billhdr_table, cust_code, limit=1)
+    return rows[0] if rows else None
+
+
+def _fetch_bill_history_rows(
+    billhdr_table: str, cust_code: str, *, limit: int
+) -> list[dict]:
+    # Prefer direct equality; fall back to TRIM for padded/typed codes.
+    query = f"""
+        SELECT *
+        FROM (
+            SELECT BILLNO,
+                   LOCATIONCODE,
+                   BILLDATE,
+                   NETBILLAMOUNT
+            FROM {billhdr_table}
+            WHERE NVL(DELFLAG, 'N') <> 'Y'
+              AND (
+                    CUSTOMERCODE = :cust_code
+                    OR TRIM(CUSTOMERCODE) = :cust_code_trim
+                  )
+            ORDER BY BILLDATE DESC, BILLNO DESC
+        )
+        WHERE ROWNUM <= :limit
+    """
+    cust_code = cust_code.strip()
+    with oracle_cursor() as cursor:
+        cursor.execute(
+            query,
+            {
+                "cust_code": cust_code,
+                "cust_code_trim": cust_code,
+                "limit": limit,
+            },
+        )
+        return [row_to_dict(cursor, row) for row in cursor.fetchall()]

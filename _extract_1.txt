@@ -1,0 +1,63 @@
+@customers_bp.get("/last-purchase")
+def customer_last_purchase():
+    cust_code = request.args.get("cust_code", "").strip()
+    if not cust_code:
+        return jsonify({"error": "cust_code is required"}), 400
+
+    billhdr_table = current_app.config["ORACLE_BILLHDR_TABLE"]
+    purchase_row = _fetch_last_purchase_row(billhdr_table, cust_code)
+    if not purchase_row:
+        return jsonify(
+            {
+                "cust_code": cust_code,
+                "last_purchase": None,
+            }
+        )
+
+    return jsonify(
+        {
+            "cust_code": cust_code,
+            "last_purchase": {
+                "billno": purchase_row.get("billno"),
+                "locationcode": purchase_row.get("locationcode"),
+                "billdate": purchase_row.get("billdate"),
+                "netbillamount": purchase_row.get("netbillamount"),
+            },
+        }
+    )
+
+
+@customers_bp.get("/bill-history")
+def customer_bill_history():
+    """Recent BILLHDR rows for a customer (newest first)."""
+    cust_code = request.args.get("cust_code", "").strip()
+    if not cust_code:
+        return jsonify({"error": "cust_code is required"}), 400
+
+    limit = parse_int(
+        request.args.get("limit", 20),
+        20,
+        min_value=1,
+        max_value=50,
+    )
+
+    billhdr_table = current_app.config["ORACLE_BILLHDR_TABLE"]
+    rows = _fetch_bill_history_rows(billhdr_table, cust_code, limit=limit)
+    bills = [
+        {
+            "billno": row.get("billno"),
+            "locationcode": row.get("locationcode"),
+            "billdate": row.get("billdate"),
+            "netbillamount": row.get("netbillamount"),
+        }
+        for row in rows
+    ]
+
+    return jsonify(
+        {
+            "cust_code": cust_code,
+            "count": len(bills),
+            "limit": limit,
+            "bills": bills,
+        }
+    )

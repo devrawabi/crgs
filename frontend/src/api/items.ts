@@ -22,6 +22,7 @@ export interface ItemsResponse {
 
 export interface FetchItemsParams {
   search?: string
+  ownOnly?: boolean
   limit?: number
   offset?: number
   updatedSince?: string
@@ -30,6 +31,7 @@ export interface FetchItemsParams {
 export function fetchItems(params: FetchItemsParams = {}) {
   return apiGet<ItemsResponse>('/api/items', {
     search: params.search,
+    own_only: params.ownOnly ? '1' : undefined,
     limit: params.limit ?? 750,
     offset: params.offset ?? 0,
     updated_since: params.updatedSince,

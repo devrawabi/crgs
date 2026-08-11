@@ -1,0 +1,102 @@
+export async function mapPool<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+
+  async function worker() {
+    while (next < items.length) {
+      const index = next++
+      results[index] = await mapper(items[index], index)
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, Math.max(items.length, 1)) },
+    () => worker()
+  )
+  await Promise.all(workers)
+  return results
+}
+
+export interface DbBillHeader {
+  billno: string | null
+  locationcode: string | null
+  billdate: string | null
+  netbillamount: number | null
+}
+
+export interface CustomerBillHistoryResponse {
+  cust_code: string
+  count: number
+  limit: number
+  bills: DbBillHeader[]
+}
+
+export interface DbBillItem {
+  slno?: number | null
+  itemcode: string
+  itemname?: string | null
+  itemdetails?: string | null
+  quantity?: number | null
+  rate?: number | null
+  unitofmeasurement?: string | null
+}
+
+export interface CustomerLastOrderResponse {
+  cust_code: string
+  last_purchase: DbBillHeader | null
+  items_offset: number
+  items_limit: number
+  has_more_items: boolean
+  items: DbBillItem[]
+}
+
+export interface BillItemsResponse {
+  count: number
+  offset: number
+  limit: number
+  has_more: boolean
+  billno: string
+  items: DbBillItem[]
+}
+
+export function fetchCustomerBillHistory(custCode: string, limit = 20) {
+  return apiGet<CustomerBillHistoryResponse>('/api/customers/bill-history', {
+    cust_code: custCode,
+    limit,
+  })
+}
+
+export function fetchCustomerLastOrder(
+  custCode: string,
+  params: {
+    itemsLimit?: number
+    itemsOffset?: number
+    billno?: string
+    location?: string
+    billdate?: string
+    netbillamount?: number | string
+  } = {}
+) {
+  return apiGet<CustomerLastOrderResponse>('/api/customers/last-order', {
+    cust_code: custCode,
+    items_limit: params.itemsLimit ?? 50,
+    items_offset: params.itemsOffset ?? 0,
+    billno: params.billno,
+    location: params.location,
+    billdate: params.billdate,
+    netbillamount: params.netbillamount,
+  })
+}
+
+export function fetchBillItems(billno: string, location?: string, limit = 50) {
+  return apiGet<BillItemsResponse>('/api/customers/bill-items', {
+    billno,
+    location: location || undefined,
+    limit,
+    offset: 0,
+  })
+}

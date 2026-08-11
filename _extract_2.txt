@@ -1,0 +1,69 @@
+    Query params:
+      - search: optional code/name filter (max 80 chars)
+      - own_only: when true/1/Y, only ITEMMASTER.OWNPRODUCT = 'Y'
+      - limit: page size (default 750, max 1000)
+      - offset: row offset (default 0; capped — prefer keyset for deep pages)
+      - after_itemcode / after_itemname / after_updated: keyset cursor
+        (seek pagination; avoids deep ROWNUM offset cost)
+      - updated_since: ISO timestamp — when LAST_UPDATED column exists, return
+        only rows changed on/after this time (delta sync)
+    """
+    table_name = _safe_ident(
+        current_app.config["ORACLE_ITEMMASTER_TABLE"], "ITEMMASTER"
+    )
+    search = (request.args.get("search") or "").strip()
+    if len(search) > _MAX_SEARCH_LEN:
+        return jsonify({"error": f"search must be at most {_MAX_SEARCH_LEN} characters"}), 400
+
+    own_only_raw = (request.args.get("own_only") or "").strip().lower()
+    own_only = own_only_raw in ("1", "true", "yes", "y")
+
+    limit = _parse_int(
+        request.args.get("limit", _DEFAULT_LIMIT),
+        _DEFAULT_LIMIT,
+        min_value=1,
+        max_value=_MAX_LIMIT,
+    )
+    offset = _parse_int(
+        request.args.get("offset", 0),
+        0,
+        min_value=0,
+        max_value=_MAX_OFFSET,
+    )
+
+    after_itemcode = (request.args.get("after_itemcode") or "").strip()
+    after_itemname = (request.args.get("after_itemname") or "").strip()
+    after_updated_raw = (request.args.get("after_updated") or "").strip()
+    after_updated = _parse_updated_since(after_updated_raw) if after_updated_raw else None
+    if after_updated_raw and after_updated is None:
+        return jsonify({"error": "after_updated must be a valid ISO-8601 timestamp"}), 400
+
+    use_keyset = bool(after_itemcode) or bool(after_itemname) or after_updated is not None
+
+    updated_since_raw = request.args.get("updated_since")
+    updated_since = _parse_updated_since(updated_since_raw)
+    if updated_since_raw and updated_since_raw.strip() and updated_since is None:
+        return jsonify({"error": "updated_since must be a valid ISO-8601 timestamp"}), 400
+
+    select_cols = list(ITEM_COLUMNS)
+    delta_supported = False
+    updated_col: str | None = None
+
+    where_parts: list[str] = []
+    params: dict = {}
+
+    if own_only:
+        where_parts.append("TRIM(OWNPRODUCT) = 'Y'")
+
+    if search:
+        # Avoid UPPER(TO_CHAR(...)) so TO_CHAR(ITEMCODE) / ITEMCODE indexes can help.
+        # Name keeps contains-match for UX.
+        where_parts.append(
+            """(
+                TO_CHAR(ITEMCODE) LIKE :search_code
+                OR UPPER(ITEMNAME) LIKE :search_name
+            )"""
+        )
+        upper = search.upper()
+        params["search_code"] = f"{upper}%"
+        params["search_name"] = f"%{upper}%"

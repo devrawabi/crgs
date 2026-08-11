@@ -645,6 +645,137 @@ def _fetch_last_purchase_row(billhdr_table: str, cust_code: str) -> dict | None:
     return _run("TRIM(CUSTOMERCODE) = :cust_code", {"cust_code": cust_code})
 
 
+def _fetch_bill_history_rows(
+    billhdr_table: str, cust_code: str, *, limit: int
+) -> list[dict]:
+    """
+    Recent bills for a customer (newest first).
+    Equality-only first so IDX_BILLHDR_CUST_DATE can be used; TRIM fallback
+    only if the padded/legacy code misses.
+    """
+    cust_code = cust_code.strip()
+    if not cust_code or limit <= 0:
+        return []
+
+    def _run(where_sql: str, binds: dict) -> list[dict]:
+        query = f"""
+            SELECT *
+            FROM (
+                SELECT BILLNO,
+                       LOCATIONCODE,
+                       BILLDATE,
+                       NETBILLAMOUNT
+                FROM {billhdr_table}
+                WHERE NVL(DELFLAG, 'N') <> 'Y'
+                  AND {where_sql}
+                ORDER BY BILLDATE DESC, BILLNO DESC
+            )
+            WHERE ROWNUM <= :limit
+        """
+        with oracle_cursor() as cursor:
+            cursor.execute(query, {**binds, "limit": limit})
+            return [row_to_dict(cursor, row) for row in cursor.fetchall()]
+
+    bound = _bind_cust_code(cust_code)
+    rows = _run("CUSTOMERCODE = :cust_code", {"cust_code": bound})
+    if rows:
+        return rows
+    return _run("TRIM(CUSTOMERCODE) = :cust_code", {"cust_code": cust_code})
+
+
+def _fetch_repeat_customers(
+    customers_view: str,
+    billhdr_table: str,
+    *,
+    days: int = 90,
+    min_bills: int = 2,
+    limit: int = 5,
+    route: str = "",
+    order_by: str = "bills",
+) -> list[dict]:
+    """
+    Top customers by BILLHDR frequency or spend in the last N days.
+
+    Used by Call Center AI for "repeat / top / highest amount" questions
+    without requiring a selected customer on the draft order.
+    """
+    days = max(1, min(int(days or 90), 365))
+    min_bills = max(1, min(int(min_bills or 1), 50))
+    limit = max(1, min(int(limit or 5), 50))
+    route = str(route or "").strip()
+    rank_by_amount = str(order_by or "bills").strip().lower() in {
+        "amount",
+        "spend",
+        "total",
+    }
+
+    route_filter = ""
+    binds: dict = {
+        "days": days,
+        "min_bills": min_bills,
+        "limit": limit,
+    }
+    if route:
+        route_filter = " AND c.ROUTE = :route"
+        binds["route"] = _bind_route(route)
+
+    order_sql = (
+        "agg.TOTAL_AMOUNT DESC NULLS LAST, agg.BILL_COUNT DESC, agg.LAST_BILL_DATE DESC"
+        if rank_by_amount
+        else "agg.BILL_COUNT DESC, agg.TOTAL_AMOUNT DESC NULLS LAST, agg.LAST_BILL_DATE DESC"
+    )
+
+    query = f"""
+        SELECT *
+        FROM (
+            SELECT c.CUST_CODE,
+                   c.CUST_NAME,
+                   c.ROUTE,
+                   c.ROUTENAME,
+                   c.MOBILE,
+                   c.CREDIT_LIMIT,
+                   c.CREDIT_AMOUNT,
+                   agg.BILL_COUNT,
+                   agg.TOTAL_AMOUNT,
+                   agg.LAST_BILL_DATE,
+                   agg.LAST_BILL_AMOUNT,
+                   agg.LAST_BILLNO,
+                   agg.LAST_LOCATION
+            FROM (
+                SELECT h.CUSTOMERCODE,
+                       COUNT(*) AS BILL_COUNT,
+                       SUM(h.NETBILLAMOUNT) AS TOTAL_AMOUNT,
+                       MAX(h.BILLDATE) AS LAST_BILL_DATE,
+                       MAX(h.NETBILLAMOUNT) KEEP (
+                           DENSE_RANK LAST ORDER BY h.BILLDATE, h.BILLNO
+                       ) AS LAST_BILL_AMOUNT,
+                       MAX(h.BILLNO) KEEP (
+                           DENSE_RANK LAST ORDER BY h.BILLDATE, h.BILLNO
+                       ) AS LAST_BILLNO,
+                       MAX(h.LOCATIONCODE) KEEP (
+                           DENSE_RANK LAST ORDER BY h.BILLDATE, h.BILLNO
+                       ) AS LAST_LOCATION
+                FROM {billhdr_table} h
+                WHERE NVL(h.DELFLAG, 'N') <> 'Y'
+                  AND h.BILLDATE >= TRUNC(SYSDATE) - :days
+                  AND h.CUSTOMERCODE IS NOT NULL
+                GROUP BY h.CUSTOMERCODE
+                HAVING COUNT(*) >= :min_bills
+            ) agg
+            INNER JOIN {customers_view} c
+              ON c.CUST_CODE = agg.CUSTOMERCODE
+            WHERE 1 = 1
+              {route_filter}
+            ORDER BY {order_sql}
+        )
+        WHERE ROWNUM <= :limit
+    """
+
+    with oracle_cursor() as cursor:
+        cursor.execute(query, binds)
+        return [row_to_dict(cursor, row) for row in cursor.fetchall()]
+
+
 def _normalize_bill_item_row(item: dict) -> dict:
     if item.get("itemcode") is not None:
         item["itemcode"] = str(item["itemcode"]).strip()
@@ -652,6 +783,15 @@ def _normalize_bill_item_row(item: dict) -> dict:
         item["itemname"] = str(item["itemname"]).strip()
     if item.get("itemdetails") is not None:
         item["itemdetails"] = str(item["itemdetails"]).strip()
+    if "ownproduct" in item:
+        raw = item.get("ownproduct")
+        if isinstance(raw, bool):
+            item["ownproduct"] = raw
+        elif raw is None:
+            item["ownproduct"] = False
+        else:
+            text = "".join(str(raw).split()).upper()
+            item["ownproduct"] = text in {"Y", "YES", "1", "TRUE", "T"}
     return item
 
 
@@ -711,28 +851,50 @@ def _fetch_bill_items_fast(
     location: str,
     offset: int,
     limit: int,
+    own_only: bool = False,
 ) -> list[dict]:
     billno = billno.strip()
     location = location.strip()
 
-    query = f"""
-        SELECT d.SLNO,
-               d.ITEMCODE,
-               NULLIF(TRIM(d.ITEMDETAILS1), '') AS ITEMNAME,
-               d.ITEMDETAILS1 AS ITEMDETAILS,
-               d.QUANTITY,
-               d.RATE,
-               d.UNITOFMEASUREMENT
-        FROM {billdtl_table} d
-        WHERE d.BILLNO = :billno
-    """
-    params: dict = {"billno": _bind_maybe_number(billno)}
+    def _build_query(*, with_own_flag: bool) -> tuple[str, dict]:
+        own_select = (
+            "CASE WHEN TRIM(i.OWNPRODUCT) = 'Y' THEN 1 ELSE 0 END AS OWNPRODUCT"
+            if with_own_flag
+            else "0 AS OWNPRODUCT"
+        )
+        own_join = (
+            f"LEFT JOIN {itemmaster_table} i ON i.ITEMCODE = d.ITEMCODE"
+            if with_own_flag
+            else ""
+        )
+        own_filter = (
+            " AND TRIM(i.OWNPRODUCT) = 'Y'" if (with_own_flag and own_only) else ""
+        )
+        base = f"""
+            SELECT d.SLNO,
+                   d.ITEMCODE,
+                   COALESCE(
+                       NULLIF(TRIM(d.ITEMDETAILS1), ''),
+                       NULLIF(TRIM(i.ITEMNAME), '')
+                   ) AS ITEMNAME,
+                   d.ITEMDETAILS1 AS ITEMDETAILS,
+                   d.QUANTITY,
+                   d.RATE,
+                   d.UNITOFMEASUREMENT,
+                   {own_select}
+            FROM {billdtl_table} d
+            {own_join}
+            WHERE d.BILLNO = :billno
+            {own_filter}
+        """
+        binds: dict = {"billno": _bind_maybe_number(billno)}
+        if location:
+            base += " AND d.LOCATIONCODE = :location"
+            binds["location"] = _bind_maybe_number(location)
+        base += " ORDER BY d.SLNO"
+        return base, binds
 
-    if location:
-        query += " AND d.LOCATIONCODE = :location"
-        params["location"] = _bind_maybe_number(location)
-
-    query += " ORDER BY d.SLNO"
+    query, params = _build_query(with_own_flag=True)
 
     if offset == 0:
         paginated_query = f"""
@@ -762,7 +924,61 @@ def _fetch_bill_items_fast(
         }
 
     with oracle_cursor() as cursor:
-        cursor.execute(paginated_query, paginated_params)
+        try:
+            cursor.execute(paginated_query, paginated_params)
+        except Exception as exc:
+            # Older schemas may lack OWNPRODUCT — retry without the flag/join.
+            if "OWNPRODUCT" not in str(exc).upper():
+                raise
+            if own_only:
+                return []
+            query, params = _build_query(with_own_flag=False)
+            # Rebuild without ITEMNAME from ITEMMASTER either when join is dropped.
+            query = f"""
+                SELECT d.SLNO,
+                       d.ITEMCODE,
+                       NULLIF(TRIM(d.ITEMDETAILS1), '') AS ITEMNAME,
+                       d.ITEMDETAILS1 AS ITEMDETAILS,
+                       d.QUANTITY,
+                       d.RATE,
+                       d.UNITOFMEASUREMENT,
+                       0 AS OWNPRODUCT
+                FROM {billdtl_table} d
+                WHERE d.BILLNO = :billno
+            """
+            params = {"billno": _bind_maybe_number(billno)}
+            if location:
+                query += " AND d.LOCATIONCODE = :location"
+                params["location"] = _bind_maybe_number(location)
+            query += " ORDER BY d.SLNO"
+            if offset == 0:
+                paginated_query = f"""
+                    SELECT *
+                    FROM (
+                        {query}
+                    )
+                    WHERE ROWNUM <= :limit
+                """
+                paginated_params = {**params, "limit": limit}
+            else:
+                paginated_query = f"""
+                    SELECT *
+                    FROM (
+                        SELECT inner_query.*, ROWNUM AS rnum
+                        FROM (
+                            {query}
+                        ) inner_query
+                        WHERE ROWNUM <= :max_row
+                    )
+                    WHERE rnum > :min_row
+                """
+                paginated_params = {
+                    **params,
+                    "max_row": offset + limit,
+                    "min_row": offset,
+                }
+            cursor.execute(paginated_query, paginated_params)
+
         rows = cursor.fetchall()
         data = []
         for row in rows:
@@ -791,6 +1007,8 @@ def customer_last_order():
         min_value=0,
         max_value=DEFAULT_MAX_OFFSET,
     )
+    own_only_raw = (request.args.get("own_only") or "").strip().lower()
+    own_only = own_only_raw in ("1", "true", "yes", "y")
 
     billhdr_table = current_app.config["ORACLE_BILLHDR_TABLE"]
     billdtl_table = current_app.config["ORACLE_BILLDTL_TABLE"]
@@ -816,6 +1034,7 @@ def customer_last_order():
                     "items_offset": items_offset,
                     "items_limit": items_limit,
                     "has_more_items": False,
+                    "own_only": own_only,
                     "items": [],
                 }
             )
@@ -833,6 +1052,7 @@ def customer_last_order():
             location=location,
             offset=items_offset,
             limit=items_limit,
+            own_only=own_only,
         )
         has_more = len(items) >= items_limit
 
@@ -848,6 +1068,7 @@ def customer_last_order():
             "items_offset": items_offset,
             "items_limit": items_limit,
             "has_more_items": has_more,
+            "own_only": own_only,
             "items": items,
         }
     )
@@ -923,6 +1144,42 @@ def customer_last_purchase():
                 "billdate": purchase_row.get("billdate"),
                 "netbillamount": purchase_row.get("netbillamount"),
             },
+        }
+    )
+
+
+@customers_bp.get("/bill-history")
+def customer_bill_history():
+    """Recent BILLHDR rows for a customer (newest first)."""
+    cust_code = request.args.get("cust_code", "").strip()
+    if not cust_code:
+        return jsonify({"error": "cust_code is required"}), 400
+
+    limit = parse_int(
+        request.args.get("limit", 20),
+        20,
+        min_value=1,
+        max_value=50,
+    )
+
+    billhdr_table = current_app.config["ORACLE_BILLHDR_TABLE"]
+    rows = _fetch_bill_history_rows(billhdr_table, cust_code, limit=limit)
+    bills = [
+        {
+            "billno": row.get("billno"),
+            "locationcode": row.get("locationcode"),
+            "billdate": row.get("billdate"),
+            "netbillamount": row.get("netbillamount"),
+        }
+        for row in rows
+    ]
+
+    return jsonify(
+        {
+            "cust_code": cust_code,
+            "count": len(bills),
+            "limit": limit,
+            "bills": bills,
         }
     )
 

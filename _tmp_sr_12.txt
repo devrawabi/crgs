@@ -1,0 +1,48 @@
+  const addLineItem = useCallback(
+    (item: {
+      itemCode: string
+      description: string
+      uom: string
+      rate: number
+      qty?: number
+    }) => {
+      const code = item.itemCode.trim()
+      if (!code) return
+      const addQty = item.qty && item.qty > 0 ? item.qty : 1
+      setLines((prev) => {
+        const existing = prev.find((l) => l.itemCode === code)
+        if (existing) {
+          return prev.map((l) =>
+            l.id === existing.id ? { ...l, qty: l.qty + addQty } : l
+          )
+        }
+        return [
+          ...prev,
+          {
+            id: newLineId(),
+            itemCode: code,
+            description: item.description.trim() || code,
+            uom: (item.uom || 'EA').trim(),
+            rate: Number(item.rate) || 0,
+            qty: addQty,
+            discount: 0,
+          },
+        ]
+      })
+    },
+    []
+  )
+
+  const addItem = (item: DbItemMaster) => {
+    addLineItem({
+      itemCode: item.itemcode.trim(),
+      description: item.itemname.trim(),
+      uom: (item.baseuom || 'EA').trim(),
+      rate: Number(item.retailprice ?? 0),
+      qty: 1,
+    })
+    setItemQuery('')
+    setItemResults([])
+    setShowItemDropdown(false)
+    itemSearchRef.current?.focus()
+  }

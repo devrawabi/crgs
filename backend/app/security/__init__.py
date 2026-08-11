@@ -11,6 +11,7 @@ from app.security.tokens import decode_access_token
 PUBLIC_Exact = {
     "/api/health",
     "/api/auth/login",
+    "/api/ai/status",
 }
 
 PUBLIC_PREFIXES: tuple[str, ...] = ()

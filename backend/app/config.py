@@ -129,3 +129,8 @@ class Config:
     ).lower() in ("1", "true", "yes")
     MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", str(10 * 1024 * 1024)))
     SECRET_KEY_MIN_LENGTH = int(os.getenv("SECRET_KEY_MIN_LENGTH", "32"))
+
+    # Call Center AI assistant (Groq OpenAI-compatible chat API).
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+    GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "45"))

@@ -1,0 +1,28 @@
+  const addItem = (item: DbItemMaster) => {
+    const code = item.itemcode.trim()
+    const existing = lines.find((l) => l.itemCode === code)
+    if (existing) {
+      setLines((prev) =>
+        prev.map((l) =>
+          l.id === existing.id ? { ...l, qty: l.qty + 1 } : l
+        )
+      )
+    } else {
+      setLines((prev) => [
+        ...prev,
+        {
+          id: newLineId(),
+          itemCode: code,
+          description: item.itemname.trim(),
+          uom: (item.baseuom || 'EA').trim(),
+          rate: Number(item.retailprice ?? 0),
+          qty: 1,
+          discount: 0,
+        },
+      ])
+    }
+    setItemQuery('')
+    setItemResults([])
+    setShowItemDropdown(false)
+    itemSearchRef.current?.focus()
+  }

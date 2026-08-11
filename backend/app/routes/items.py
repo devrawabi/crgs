@@ -206,6 +206,7 @@ def list_items():
 
     Query params:
       - search: optional code/name filter (max 80 chars)
+      - own_only: when true/1/Y, only ITEMMASTER.OWNPRODUCT = 'Y'
       - limit: page size (default 750, max 1000)
       - offset: row offset (default 0; capped — prefer keyset for deep pages)
       - after_itemcode / after_itemname / after_updated: keyset cursor
@@ -219,6 +220,9 @@ def list_items():
     search = (request.args.get("search") or "").strip()
     if len(search) > _MAX_SEARCH_LEN:
         return jsonify({"error": f"search must be at most {_MAX_SEARCH_LEN} characters"}), 400
+
+    own_only_raw = (request.args.get("own_only") or "").strip().lower()
+    own_only = own_only_raw in ("1", "true", "yes", "y")
 
     limit = _parse_int(
         request.args.get("limit", _DEFAULT_LIMIT),
@@ -253,6 +257,9 @@ def list_items():
 
     where_parts: list[str] = []
     params: dict = {}
+
+    if own_only:
+        where_parts.append("TRIM(OWNPRODUCT) = 'Y'")
 
     if search:
         if len(search.strip()) < 2:
@@ -343,8 +350,27 @@ def list_items():
             cursor.execute(query, params)
         except Exception as exc:
             # Fallback if OWNPRODUCT is missing on an older schema.
-            if "OWNPRODUCT" in str(exc).upper() and "OWNPRODUCT" in select_cols:
+            if "OWNPRODUCT" in str(exc).upper() and (
+                "OWNPRODUCT" in select_cols or own_only
+            ):
                 logger.warning("OWNPRODUCT unavailable on %s — retrying without it", table_name)
+                if own_only:
+                    rows = []
+                    has_more = False
+                    data = []
+                    server_time = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+                    return jsonify(
+                        {
+                            "count": 0,
+                            "offset": 0 if use_keyset else offset,
+                            "limit": limit,
+                            "has_more": False,
+                            "delta_supported": delta_supported,
+                            "server_time": server_time,
+                            "next_cursor": None,
+                            "items": [],
+                        }
+                    )
                 select_cols = [c for c in select_cols if c != "OWNPRODUCT"]
                 columns_sql = ", ".join(select_cols)
                 inner_sql_fb = f"""

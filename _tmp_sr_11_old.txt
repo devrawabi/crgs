@@ -1,0 +1,22 @@
+        try:
+            cursor.execute(query, params)
+        except Exception as exc:
+            # Fallback if OWNPRODUCT is missing on an older schema.
+            if "OWNPRODUCT" in str(exc).upper() and "OWNPRODUCT" in select_cols:
+                logger.warning("OWNPRODUCT unavailable on %s — retrying without it", table_name)
+                select_cols = [c for c in select_cols if c != "OWNPRODUCT"]
+                columns_sql = ", ".join(select_cols)
+                inner_sql_fb = f"""
+                    SELECT {columns_sql}
+                    FROM {table_name}
+                    {where_sql}
+                    {order_sql}
+                """
+                if use_keyset or offset == 0:
+                    fb_query = rownum_limit_sql(inner_sql_fb, columns_sql=columns_sql)
+                else:
+                    fb_query = rownum_page_sql(inner_sql_fb, columns_sql=columns_sql)
+                cursor.execute(fb_query, params)
+            else:
+                raise
+        rows = cursor.fetchall()
