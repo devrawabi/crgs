@@ -113,65 +113,82 @@ class _VisitLocationPickerSheetState extends State<_VisitLocationPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = ShadTheme.of(context);
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final media = MediaQuery.of(context);
+    final maxHeight = media.size.height * 0.9;
+    // Modal sheets skip bottom safe-area; pad for nav bar / gesture /
+    // tablet taskbar (viewPadding) plus keyboard (viewInsets).
+    final bottomPad =
+        20 + media.viewInsets.bottom + media.viewPadding.bottom;
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + bottomInset),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Pick Visit Location',
-            style: theme.textTheme.large.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Tap the map to move the pin or use your current GPS location.',
-            style: theme.textTheme.muted,
-          ),
-          const SizedBox(height: 16),
-          InteractiveLocationMap(
-            latitude: _latitude,
-            longitude: _longitude,
-            height: 260,
-            isLocating: _isLocating,
-            onLocationChanged: _onMapLocationChanged,
-            onMyLocationPressed: _useCurrentLocation,
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.brandContainer.withValues(alpha: 0.45),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.brand.withValues(alpha: 0.2)),
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(20, 0, 20, bottomPad),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Pick Visit Location',
+              style: theme.textTheme.large.copyWith(fontWeight: FontWeight.w600),
             ),
-            child: Row(
-              children: [
-                const Icon(AppIcons.locationPin, size: 18, color: AppColors.brand),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _isResolvingAddress
-                      ? Text('Resolving address...', style: theme.textTheme.muted)
-                      : Text(
-                          _address,
-                          style: theme.textTheme.small.copyWith(
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
+            const SizedBox(height: 4),
+            Text(
+              'Tap the map to move the pin or use your current GPS location.',
+              style: theme.textTheme.muted,
+            ),
+            const SizedBox(height: 16),
+            InteractiveLocationMap(
+              latitude: _latitude,
+              longitude: _longitude,
+              height: 260,
+              isLocating: _isLocating,
+              onLocationChanged: _onMapLocationChanged,
+              onMyLocationPressed: _useCurrentLocation,
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.brandContainer.withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppColors.brand.withValues(alpha: 0.2),
                 ),
-              ],
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    AppIcons.locationPin,
+                    size: 18,
+                    color: AppColors.brand,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _isResolvingAddress
+                        ? Text(
+                            'Resolving address...',
+                            style: theme.textTheme.muted,
+                          )
+                        : Text(
+                            _address,
+                            style: theme.textTheme.small.copyWith(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          ShadButton(
-            onPressed: _confirm,
-            width: double.infinity,
-            leading: const Icon(AppIcons.check, size: 18),
-            child: const Text('Confirm Location'),
-          ),
-        ],
+            const SizedBox(height: 16),
+            ShadButton(
+              onPressed: _confirm,
+              width: double.infinity,
+              leading: const Icon(AppIcons.check, size: 18),
+              child: const Text('Confirm Location'),
+            ),
+          ],
+        ),
       ),
     );
   }
